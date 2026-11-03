@@ -14,7 +14,7 @@ import os
 import json
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 
 from PySide6.QtCore import Qt, QThread, Signal, QUrl
 from PySide6.QtGui import QFont, QColor, QDesktopServices

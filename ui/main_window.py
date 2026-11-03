@@ -5,9 +5,9 @@ MUALLİMUN AI SES STÜDYOSU PRO - ANA PENCERE VE STÜDYO YÖNETİM MERKEZİ (ui/
 Özellikler:
   1. Aydınlık (Light) ve Karanlık (Dark) Stüdyo Teması Geçişi (Dalga Formu ve Tüm Sekmeler Dahil)
   2. Gerçek Teknik Ses Kontrolü (QA): RMS Enerji/Sessizlik, Tepe dBFS, Kırpılma ve Kelime Süresi Ölçümü
-  3. CancelToken ve closeEvent Korumalı Güvenli QThread Yaşam Döngüsü + VRAM Tahliyesi
-  4. Spark-TTS Varsayılan Motor Önceliği, Otomatik Dosya Numaralandırma ve Klavye Kısayolları
-  5. İlk Açılış Başlangıç Turu, Kapsamlı Kullanım Kılavuzu ve GitHub Otomatik Versiyon Kontrolü
+  3. Detaylı GPU Kademe Seçim Penceresi, Özel Referans Ses Ekleme Diyaloğu ve 18 Parametreli Tam DSP Paneli
+  4. CancelToken ve closeEvent Korumalı Güvenli QThread Yaşam Döngüsü + VRAM Tahliyesi
+  5. İlk Açılış Başlangıç Turu, Kapsamlı Kullanım Kılavuzu ve GitHub (muallimun/Muallimun_Ses_Asistani) Güncelleyici
 """
 
 import os
@@ -16,9 +16,8 @@ import sys
 import uuid
 import math
 import shutil
-import subprocess
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -33,6 +32,7 @@ from PySide6.QtGui import (
     QCloseEvent,
     QKeySequence,
     QShortcut,
+    QGuiApplication,
 )
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -59,6 +59,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QFrame,
     QSplitter,
+    QRadioButton,
+    QButtonGroup,
 )
 
 from core.config_manager import ConfigManager, PROJECT_ROOT
@@ -67,6 +69,7 @@ from core.studyo_motoru import (
     CancelToken,
     DONANIM_PROFILLERI,
     REF_CACHE_DIR,
+    REF_METIN_1,
     arapca_akustik_metin_hazirla,
     gpu_vram_durumu_getir,
     gpu_bellegini_optimize_et,
@@ -90,6 +93,8 @@ from ui.rehber_ve_guncelleyici import (
     GitHubGuncellemeKontrolWorker,
 )
 
+VARSAYILAN_GITHUB_REPO = "muallimun/Muallimun_Ses_Asistani"
+
 
 def _kompakt_kutu_ayarla(cmb: QComboBox, min_genislik: int = 120) -> None:
     cmb.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
@@ -102,7 +107,7 @@ def _kompakt_kutu_ayarla(cmb: QComboBox, min_genislik: int = 120) -> None:
 # ==============================================================================
 class GarantiliStudyoSesOynatici:
     """
-    Windows winsound veya Qt/sistem oynatıcısı üzerinden WAV ve MP3 dosyalarını çalar.
+    Windows winsound veya sistem oynatıcısı üzerinden WAV ve MP3 dosyalarını çalar.
     Her oynatmada benzersiz geçici WAV kullanarak kaynak dosyanın kilitlenmesini önler.
     """
     def __init__(self) -> None:
@@ -118,7 +123,6 @@ class GarantiliStudyoSesOynatici:
             REF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
             gecici_wav = REF_CACHE_DIR / f"_play_{uuid.uuid4().hex[:8]}.wav"
 
-            # Kaynak dosyayı kilitlenmeye karşı 24kHz PCM_16 geçici WAV'a çöz
             veri = _ses_dosyasini_guvenli_oku_np(dosya_yolu, hedef_sr=24000)
             if veri.size < 100:
                 return False, "Ses dosyası boş."
@@ -156,12 +160,6 @@ class GarantiliStudyoSesOynatici:
 # 2. GERÇEK TEKNİK SES KONTROLÜ (QA) VE 24kHz DALGA FORMU GÖSTERGESİ
 # ==============================================================================
 class StudyoWaveformWidget(QWidget):
-    """
-    Üretilen sesin dalga formunu çizer ve gerçek teknik sinyal denetimi (QA) yapar:
-      - Süre ve kelime başı süre kontrolü
-      - RMS ses enerjisi kontrolü (Sessiz / boş kayıtları yakalar!)
-      - Tepe seviyesi (dBFS) ve kırpılma (clipping) kontrolü
-    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(88)
@@ -169,7 +167,7 @@ class StudyoWaveformWidget(QWidget):
         self.ornekler: Optional[np.ndarray] = None
         self.dosya_adi: str = ""
         self.qa_metni: str = "Ses üretildiğinde veya dinlendiğinde dalga formu ve teknik sinyal raporu burada görünür"
-        self.qa_durum: str = "beklemede"  # 'uygun', 'uyari', 'beklemede'
+        self.qa_durum: str = "beklemede"
         self.koyu_tema: bool = True
 
     def tema_ayarla(self, koyu_mu: bool) -> None:
@@ -205,7 +203,6 @@ class StudyoWaveformWidget(QWidget):
             rms_db = 20.0 * math.log10(max(1e-6, rms))
             k_sayisi = max(1, int(kelime_sayisi))
 
-            # Çubuk grafik için 140 dilime indirge
             dilim_sayisi = 140
             adim = max(1, veri.size // dilim_sayisi)
             dilimler = [
@@ -215,7 +212,6 @@ class StudyoWaveformWidget(QWidget):
             self.ornekler = np.asarray(dilimler, dtype=np.float32)
             self.dosya_adi = os.path.basename(dosya_yolu)
 
-            # Gerçek Teknik Sinyal QA Kriterleri (Denetim P1-02 / F11)
             uyarilar = []
             if rms_db < -44.0 or tepe_db < -30.0:
                 uyarilar.append("Çok kısık / sessiz sinyal")
@@ -300,7 +296,250 @@ class StudyoWaveformWidget(QWidget):
 
 
 # ==============================================================================
-# 3. TEKLİ STÜDYO ARKA PLAN SENTEZ İŞÇİSİ (CANCELTOKEN & PRE-SET TOKEN DESTEKLİ)
+# 3. GPU OPTİMİZASYON VE 4 KADEMELİ DONANIM SEÇİM PENCERESİ
+# ==============================================================================
+class GpuKademeSecimDialog(QDialog):
+    def __init__(self, config_manager: ConfigManager, studyo_motor: Optional[MuallimunStudyoSesMotoru], parent=None):
+        super().__init__(parent)
+        self.config_manager = config_manager
+        self.studyo_motor = studyo_motor
+        self.setWindowTitle("⚡ GPU Bellek Optimizasyonu ve Donanım Kademesi Seçimi")
+        self.setMinimumSize(680, 440)
+        self.resize(720, 470)
+
+        tema = self.config_manager.user_settings.get("tema_modu", "koyu")
+        self.setStyleSheet(studyo_tema_qss_olustur(tema))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        bilgi = gpu_vram_durumu_getir()
+        lbl_ust = QLabel(
+            f"<b>Aktif Donanım:</b> {bilgi['cihaz_adi']}<br>"
+            f"<b>Bellek Durumu:</b> Model Kullanımı: {bilgi['kullanilan_gb']} GB  |  "
+            f"Gerçek Boş VRAM: <b>{bilgi.get('bos_gb', 0)} GB</b> / Toplam: {bilgi['toplam_gb']} GB"
+        )
+        lbl_ust.setStyleSheet("font-size: 10pt; color: #10b981;")
+        layout.addWidget(lbl_ust)
+
+        aciklama = QLabel(
+            "💡 <b>Donanım Çalışma Kademesi:</b> 'Otomatik' seçeneği ekran kartınızın boş VRAM kapasitesine göre "
+            "en uygun kademeyi seçer. Dilerseniz aşağıdaki 4 kademeden birini zorunlu olarak sabitleyebilirsiniz:"
+        )
+        aciklama.setWordWrap(True)
+        layout.addWidget(aciklama)
+
+        self.radio_grup = QButtonGroup(self)
+        mevcut_secim = self.config_manager.user_settings.get("zorunlu_donanim_kademesi", "OTOMATIK")
+
+        secenekler = [
+            (
+                "OTOMATIK",
+                f"✨ Otomatik (Önerilen: {bilgi['profil_detay']['ad']})",
+                "Ekran kartınızın boş VRAM miktarına göre cümle bölme ve bellek korumasını otomatik yönetir.",
+            )
+        ]
+        for kod, p in DONANIM_PROFILLERI.items():
+            secenekler.append((kod, p["ad"], p["aciklama"]))
+
+        for idx, (kod, baslik, detay) in enumerate(secenekler):
+            kutu = QFrame()
+            kutu.setStyleSheet("QFrame { border: 1px solid #334155; border-radius: 6px; padding: 4px; }")
+            kv = QVBoxLayout(kutu)
+            kv.setContentsMargins(8, 4, 8, 4)
+            kv.setSpacing(2)
+
+            rb = QRadioButton(baslik)
+            rb.setProperty("kademe_kodu", kod)
+            rb.setStyleSheet("font-weight: bold;")
+            if kod == mevcut_secim:
+                rb.setChecked(True)
+            self.radio_grup.addButton(rb, idx)
+            kv.addWidget(rb)
+
+            lbl_d = QLabel(f"   ℹ️ {detay}")
+            lbl_d.setWordWrap(True)
+            lbl_d.setStyleSheet("font-size: 8.5pt; color: #94a3b8;")
+            kv.addWidget(lbl_d)
+            layout.addWidget(kutu)
+
+        layout.addStretch()
+
+        alt = QHBoxLayout()
+        btn_pasif_bosalt = QPushButton("🧹 VRAM Önbelleğini Şimdi Temizle")
+        btn_pasif_bosalt.setStyleSheet("background-color: #0284c7; color: white; padding: 6px 12px;")
+        btn_pasif_bosalt.clicked.connect(self._vram_simdi_temizle)
+        alt.addWidget(btn_pasif_bosalt)
+        alt.addStretch()
+
+        btn_kaydet = QPushButton("✅ Seçimi Uygula ve Optimize Et")
+        btn_kaydet.setStyleSheet("background-color: #059669; color: white; padding: 6px 16px; font-weight: bold;")
+        btn_kaydet.clicked.connect(self._uygula_ve_kapat)
+        alt.addWidget(btn_kaydet)
+
+        btn_iptal = QPushButton("İptal")
+        btn_iptal.clicked.connect(self.reject)
+        alt.addWidget(btn_iptal)
+        layout.addLayout(alt)
+
+    def _vram_simdi_temizle(self) -> None:
+        if self.studyo_motor is not None:
+            self.studyo_motor.bosalt(sadece_pasif_modelleri=True)
+        gpu_bellegini_optimize_et(self.studyo_motor)
+        QMessageBox.information(self, "Bellek Temizlendi", "GPU CUDA önbelleği ve pasif modeller başarıyla temizlendi.")
+
+    def _uygula_ve_kapat(self) -> None:
+        secili_btn = self.radio_grup.checkedButton()
+        secilen_kod = secili_btn.property("kademe_kodu") if secili_btn else "OTOMATIK"
+        self.config_manager.user_settings["zorunlu_donanim_kademesi"] = secilen_kod
+        self.config_manager.save_user_settings()
+
+        gpu_bellegini_optimize_et(
+            studyo_motor=self.studyo_motor,
+            zorunlu_kademe_kodu=None if secilen_kod == "OTOMATIK" else secilen_kod,
+        )
+        self.accept()
+
+
+# ==============================================================================
+# 4. DETAYLI ÖZEL REFERANS SES EKLEME PENCERESİ (AD, CİNSİYET, KATEGORİ, ARAPÇA METİN)
+# ==============================================================================
+class OzelReferansSesEkleDialog(QDialog):
+    def __init__(self, config_manager: ConfigManager, ses_oynatici: GarantiliStudyoSesOynatici, parent=None):
+        super().__init__(parent)
+        self.config_manager = config_manager
+        self.ses_oynatici = ses_oynatici
+        self.eklenen_kayit: Optional[Dict[str, Any]] = None
+
+        self.setWindowTitle("➕ Yeni Özel Referans Ses Karakteri Ekle (24kHz Stüdyo Klonlama)")
+        self.setMinimumSize(640, 420)
+        self.resize(680, 450)
+
+        tema = self.config_manager.user_settings.get("tema_modu", "koyu")
+        self.setStyleSheet(studyo_tema_qss_olustur(tema))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        aciklama = QLabel(
+            "💡 <b>Referans Ses Ekleme Rehberi:</b> 5–15 saniye uzunluğunda, arka plan müziği ve yankısı olmayan "
+            "net bir konuşma kaydı seçin. Dosya otomatik olarak <b>24kHz Mono PCM_16 WAV</b> standardına dönüştürülecektir."
+        )
+        aciklama.setWordWrap(True)
+        layout.addWidget(aciklama)
+
+        dosya_bar = QHBoxLayout()
+        dosya_bar.addWidget(QLabel("Ses Dosyası:"))
+        self.edt_dosya_yolu = QLineEdit()
+        self.edt_dosya_yolu.setPlaceholderText("Bilgisayarınızdan .wav, .mp3, .flac veya .ogg dosyası seçin...")
+        dosya_bar.addWidget(self.edt_dosya_yolu, stretch=1)
+
+        btn_gozat = QPushButton("📂 Gözat...")
+        btn_gozat.setStyleSheet("background-color: #0284c7; color: white;")
+        btn_gozat.clicked.connect(self._dosya_sec)
+        dosya_bar.addWidget(btn_gozat)
+
+        btn_dinle = QPushButton("🔊 Dinle")
+        btn_dinle.clicked.connect(self._secili_dosyayi_dinle)
+        dosya_bar.addWidget(btn_dinle)
+        layout.addLayout(dosya_bar)
+
+        form_grid = QGridLayout()
+        form_grid.setSpacing(8)
+
+        form_grid.addWidget(QLabel("Karakter Görünür Adı:"), 0, 0)
+        self.edt_karakter_adi = QLineEdit()
+        self.edt_karakter_adi.setPlaceholderText("Örn: Özel Muallim 1 (Ahmed Hoca)")
+        form_grid.addWidget(self.edt_karakter_adi, 0, 1)
+
+        form_grid.addWidget(QLabel("Cinsiyet:"), 1, 0)
+        self.cmb_cinsiyet = QComboBox()
+        self.cmb_cinsiyet.addItem("👨 Erkek (E)", "E")
+        self.cmb_cinsiyet.addItem("👩 Kadın (K)", "K")
+        self.cmb_cinsiyet.currentIndexChanged.connect(self._cinsiyet_degisti)
+        form_grid.addWidget(self.cmb_cinsiyet, 1, 1)
+
+        form_grid.addWidget(QLabel("Rol Kategorisi:"), 2, 0)
+        self.cmb_kategori = QComboBox()
+        self.cmb_kategori.addItem("Yetişkin Erkek (yetiskin_E)", "yetiskin_E")
+        self.cmb_kategori.addItem("Erkek Çocuk / Genç (cocuk_E)", "cocuk_E")
+        self.cmb_kategori.addItem("Yetişkin Kadın (yetiskin_K)", "yetiskin_K")
+        self.cmb_kategori.addItem("Kız Çocuk / Genç (cocuk_K)", "cocuk_K")
+        form_grid.addWidget(self.cmb_kategori, 2, 1)
+        layout.addLayout(form_grid)
+
+        layout.addWidget(QLabel("📜 <b>Referans Seste Okunan Arapça Metin (Prompt Text — Spark-TTS Klonlama İçin Önemli):</b>"))
+        self.txt_ref_metin = QTextEdit()
+        self.txt_ref_metin.setLayoutDirection(Qt.RightToLeft)
+        self.txt_ref_metin.setFont(QFont("Traditional Arabic", 16))
+        self.txt_ref_metin.setPlainText(REF_METIN_1)
+        layout.addWidget(self.txt_ref_metin, stretch=1)
+
+        alt = QHBoxLayout()
+        alt.addStretch()
+        btn_ekle = QPushButton("➕ 24kHz WAV'a Dönüştür ve Havuza Ekle")
+        btn_ekle.setStyleSheet("background-color: #059669; color: white; padding: 7px 16px; font-weight: bold;")
+        btn_ekle.clicked.connect(self._onayla_ve_ekle)
+        alt.addWidget(btn_ekle)
+
+        btn_iptal = QPushButton("İptal")
+        btn_iptal.clicked.connect(self.reject)
+        alt.addWidget(btn_iptal)
+        layout.addLayout(alt)
+
+    def _cinsiyet_degisti(self) -> None:
+        cins = self.cmb_cinsiyet.currentData() or "E"
+        hedef_kat = "yetiskin_K" if cins == "K" else "yetiskin_E"
+        idx = self.cmb_kategori.findData(hedef_kat)
+        if idx >= 0:
+            self.cmb_kategori.setCurrentIndex(idx)
+
+    def _dosya_sec(self) -> None:
+        dosya, _ = QFileDialog.getOpenFileName(
+            self,
+            "Referans Ses Dosyası Seç",
+            str(Path.home() / "Desktop"),
+            "Ses Dosyaları (*.wav *.mp3 *.flac *.ogg)",
+        )
+        if dosya:
+            self.edt_dosya_yolu.setText(dosya)
+            if not self.edt_karakter_adi.text().strip():
+                self.edt_karakter_adi.setText(f"Özel Ses ({Path(dosya).stem[:20]})")
+
+    def _secili_dosyayi_dinle(self) -> None:
+        yol = self.edt_dosya_yolu.text().strip()
+        if yol and os.path.exists(yol):
+            self.ses_oynatici.cal(yol)
+        else:
+            QMessageBox.warning(self, "Dosya Yok", "Lütfen önce geçerli bir ses dosyası seçin.")
+
+    def _onayla_ve_ekle(self) -> None:
+        yol = self.edt_dosya_yolu.text().strip()
+        if not yol or not os.path.exists(yol):
+            QMessageBox.warning(self, "Dosya Seçilmedi", "Lütfen eklenecek referans ses dosyasını seçin.")
+            return
+        ad = self.edt_karakter_adi.text().strip() or f"Özel Ses ({Path(yol).stem[:18]})"
+        cins = self.cmb_cinsiyet.currentData() or "E"
+        kat = self.cmb_kategori.currentData() or f"yetiskin_{cins}"
+        ref_metin = self.txt_ref_metin.toPlainText().strip() or REF_METIN_1
+
+        try:
+            self.eklenen_kayit = self.config_manager.add_custom_voice(
+                kaynak_dosya_yolu=yol,
+                gorunen_ad=ad,
+                cinsiyet=cins,
+                kategori=kat,
+                ref_metin=ref_metin,
+            )
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Ses Ekleme Hatası", str(e))
+
+
+# ==============================================================================
+# 5. TEKLİ STÜDYO ARKA PLAN SENTEZ İŞÇİSİ (CANCELTOKEN & PRE-SET TOKEN DESTEKLİ)
 # ==============================================================================
 class TekliSentezWorker(QThread):
     ilerleme_sinyali = Signal(int, str)
@@ -472,12 +711,19 @@ class TekliSentezWorker(QThread):
 
 
 # ==============================================================================
-# 4. ANA PENCERE (MUALLİMUN AI SES STÜDYOSU PRO)
+# 6. ANA PENCERE (MUALLİMUN AI SES STÜDYOSU PRO)
 # ==============================================================================
 class MuallimunStudyoMainWindow(QMainWindow):
     def __init__(self, config_manager: ConfigManager):
         super().__init__()
         self.config_manager = config_manager
+        # Resmi GitHub deposunu garanti altına al
+        if self.config_manager.user_settings.get("github_repo") in (
+            "", None, "abdullahtat/muallimun-ai-ses-studyosu-pro"
+        ):
+            self.config_manager.user_settings["github_repo"] = VARSAYILAN_GITHUB_REPO
+            self.config_manager.save_user_settings()
+
         self.studyo_motor: Optional[MuallimunStudyoSesMotoru] = None
         self.tekli_worker: Optional[TekliSentezWorker] = None
         self._bekleyen_tekli_isciler: List[QThread] = []
@@ -501,7 +747,6 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self._gorunum_modunu_uygula(self.uzman_mod)
         self.gpu_durumunu_guncelle()
 
-        # Açılış sonrası Başlangıç Turu ve Otomatik GitHub Güncelleme Kontrolü
         QTimer.singleShot(350, self._acilis_kontrollerini_calistir)
 
     def _kisayollari_bagla(self) -> None:
@@ -515,7 +760,7 @@ class MuallimunStudyoMainWindow(QMainWindow):
             dlg.exec()
 
         if self.config_manager.user_settings.get("otomatik_guncelleme_kontrolu", True):
-            repo = self.config_manager.user_settings.get("github_repo", "abdullahtat/muallimun-ai-ses-studyosu-pro")
+            repo = self.config_manager.user_settings.get("github_repo", VARSAYILAN_GITHUB_REPO)
             self._guncelleme_worker = GitHubGuncellemeKontrolWorker(github_repo=repo, mevcut_surum=APP_VERSION)
             self._guncelleme_worker.sonuc_sinyali.connect(self._arka_plan_guncelleme_sonucu)
             self._guncelleme_worker.start()
@@ -532,12 +777,9 @@ class MuallimunStudyoMainWindow(QMainWindow):
             )
             dlg.exec()
 
-    # ------------------------------------------------------------------
-    # MOTOR YÖNETİMİ VE VRAM KORUMASI
-    # ------------------------------------------------------------------
     def motoru_getir_veya_yukle(
         self,
-        log_fn: Optional[ Any ] = None,
+        log_fn: Optional[Any] = None,
         zorunlu_motor_tipi: Optional[str] = None,
     ) -> MuallimunStudyoSesMotoru:
         hedef_motor = (
@@ -559,7 +801,6 @@ class MuallimunStudyoMainWindow(QMainWindow):
         else:
             if log_fn is not None:
                 self.studyo_motor.log_callback = log_fn
-            # Motor değiştiyse eski modeli VRAM'den sil (5.44 GB taşmasını önler!)
             if self.studyo_motor.motor_tipi != hedef_motor:
                 self.studyo_motor.aktif_motoru_degistir(hedef_motor)
 
@@ -576,9 +817,8 @@ class MuallimunStudyoMainWindow(QMainWindow):
         ana_v.setContentsMargins(10, 8, 10, 8)
         ana_v.setSpacing(6)
 
-        # 1. ÜST BAŞLIK, TEMA, KILAVUZ, GÜNCELLEME VE DONANIM BARI
         ust_bar = QHBoxLayout()
-        ust_bar.setSpacing(8)
+        ust_bar.setSpacing(6)
 
         baslik_kutu = QVBoxLayout()
         baslik_kutu.setSpacing(1)
@@ -613,7 +853,7 @@ class MuallimunStudyoMainWindow(QMainWindow):
 
         self.btn_gpu_optimize = QPushButton("⚡ GPU Optimize Et")
         self.btn_gpu_optimize.setFixedHeight(32)
-        self.btn_gpu_optimize.setToolTip("VRAM belleğini temizler ve donanım çalışma kademesini yapılandırır.")
+        self.btn_gpu_optimize.setToolTip("VRAM belleğini temizler ve 4 donanım çalışma kademesinden birini seçmenizi sağlar.")
         self.btn_gpu_optimize.setStyleSheet(
             "background-color: #7c3aed; color: white; border: none; padding: 5px 12px; font-weight: bold;"
         )
@@ -637,13 +877,12 @@ class MuallimunStudyoMainWindow(QMainWindow):
 
         self.btn_guncelleme = QPushButton("🔄 Güncelleme")
         self.btn_guncelleme.setFixedHeight(32)
-        self.btn_guncelleme.setToolTip("GitHub üzerinden yeni uygulama sürümü olup olmadığını kontrol eder.")
+        self.btn_guncelleme.setToolTip("GitHub (muallimun/Muallimun_Ses_Asistani) üzerinden yeni sürüm kontrolü yapar.")
         self.btn_guncelleme.clicked.connect(self._guncelleme_penceresini_ac)
         ust_bar.addWidget(self.btn_guncelleme)
 
         ana_v.addLayout(ust_bar)
 
-        # 2. ANA SEKMELER
         self.ana_tabs = QTabWidget()
         self.sekme_1_tekli = self._sekme_1_tekli_studyo_olustur()
         self.sekme_2_referans = self._sekme_2_referans_havuzu_olustur()
@@ -659,7 +898,6 @@ class MuallimunStudyoMainWindow(QMainWindow):
 
         ana_v.addWidget(self.ana_tabs, stretch=1)
 
-        # 3. ALT OYNATICI VE DURUM BARI
         alt_bar = QHBoxLayout()
         alt_bar.setSpacing(8)
 
@@ -680,6 +918,15 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self.lbl_durum_cubugu.setStyleSheet("color: #94a3b8; font-size: 9pt;")
         alt_bar.addWidget(self.lbl_durum_cubugu, stretch=1)
 
+        btn_github_repo = QPushButton("🐙 GitHub")
+        btn_github_repo.setFixedHeight(28)
+        btn_github_repo.setCursor(Qt.PointingHandCursor)
+        btn_github_repo.setToolTip("https://github.com/muallimun/Muallimun_Ses_Asistani")
+        btn_github_repo.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://github.com/muallimun/Muallimun_Ses_Asistani"))
+        )
+        alt_bar.addWidget(btn_github_repo)
+
         btn_portal = QPushButton("🏛️ Muallimun Dijital Eğitim Teknolojileri — 🌐 muallimun.net")
         btn_portal.setFixedHeight(28)
         btn_portal.setCursor(Qt.PointingHandCursor)
@@ -692,7 +939,7 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self.txt_teknik_log.setReadOnly(True)
 
     # ------------------------------------------------------------------
-    # SEKME 1: TEKLİ SESLENDİRME STÜDYOSU (ESNEK SPLITTER MİMARİSİ)
+    # SEKME 1: TEKLİ SESLENDİRME STÜDYOSU
     # ------------------------------------------------------------------
     def _sekme_1_tekli_studyo_olustur(self) -> QWidget:
         sayfa = QWidget()
@@ -702,13 +949,11 @@ class MuallimunStudyoMainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         dis_h.addWidget(splitter)
 
-        # SOL PANEL: ADIM 1, ADIM 2 VE ADIM 3
         sol_panel = QWidget()
         sol_v = QVBoxLayout(sol_panel)
         sol_v.setContentsMargins(0, 0, 6, 0)
         sol_v.setSpacing(6)
 
-        # Adım 1: İçerik Türü, Tonlama ve Vakıf Türü
         adim1_kutu = QGroupBox("Adım 1 — İçerik Türü, Doğal Duygu/Tonlama ve Vakıf Seçimi")
         a1_h = QHBoxLayout(adim1_kutu)
         a1_h.setContentsMargins(10, 8, 10, 8)
@@ -741,7 +986,6 @@ class MuallimunStudyoMainWindow(QMainWindow):
         a1_h.addWidget(self.cmb_vakif_turu)
         sol_v.addWidget(adim1_kutu)
 
-        # Adım 2: Arapça Metin, Hareke Klavyesi ve Canlı Vakıflı Okunuş
         adim2_kutu = QGroupBox("Adım 2 — Seslendirilecek Arapça Metin")
         a2_v = QVBoxLayout(adim2_kutu)
         a2_v.setContentsMargins(10, 8, 10, 8)
@@ -753,6 +997,21 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self.btn_hareke_goster.toggled.connect(lambda acik: self.hareke_cubugu.setVisible(acik))
         hareke_ust_bar.addWidget(self.btn_hareke_goster)
         hareke_ust_bar.addStretch()
+
+        btn_kopyala = QPushButton("📋 Kopyala")
+        btn_kopyala.setToolTip("Arapça metni panoya kopyalar.")
+        btn_kopyala.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.txt_arapca_girdi.toPlainText()))
+        hareke_ust_bar.addWidget(btn_kopyala)
+
+        btn_yapistir = QPushButton("📥 Yapıştır")
+        btn_yapistir.setToolTip("Panodaki Arapça metni yapıştırır.")
+        btn_yapistir.clicked.connect(lambda: self.txt_arapca_girdi.setPlainText(QGuiApplication.clipboard().text()))
+        hareke_ust_bar.addWidget(btn_yapistir)
+
+        btn_temizle_metin = QPushButton("🧹 Temizle")
+        btn_temizle_metin.setToolTip("Arapça metin kutusunu temizler.")
+        btn_temizle_metin.clicked.connect(self.txt_arapca_girdi.clear)
+        hareke_ust_bar.addWidget(btn_temizle_metin)
 
         btn_ornek_metin = QPushButton("📝 Örnek Metin Getir")
         btn_ornek_metin.clicked.connect(self._tekli_ornek_metin_getir)
@@ -791,21 +1050,25 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self.txt_arapca_girdi.textChanged.connect(self._canli_vakif_onizleme_guncelle)
         a2_v.addWidget(self.txt_arapca_girdi, stretch=1)
 
+        vakif_bar = QHBoxLayout()
         lbl_vakif = QLabel("🔍 <b>Canlı Vakıflı Okunuş (Motorun Okuyacağı Hal — Düzenlenebilir):</b>")
         lbl_vakif.setStyleSheet("color: #10b981; font-size: 9pt;")
-        a2_v.addWidget(lbl_vakif)
+        vakif_bar.addWidget(lbl_vakif)
+        vakif_bar.addStretch()
+
+        btn_vakif_sifirla = QPushButton("🔄 Otomatik Vakıf Hesapla")
+        btn_vakif_sifirla.setFixedHeight(24)
+        btn_vakif_sifirla.clicked.connect(self._canli_vakif_onizleme_guncelle)
+        vakif_bar.addWidget(btn_vakif_sifirla)
+        a2_v.addLayout(vakif_bar)
 
         self.edt_akustik_onizleme = QLineEdit()
         self.edt_akustik_onizleme.setLayoutDirection(Qt.RightToLeft)
         self.edt_akustik_onizleme.setFont(QFont("Traditional Arabic", 19))
         self.edt_akustik_onizleme.setFixedHeight(44)
-        self.edt_akustik_onizleme.setStyleSheet(
-            "background-color: #063928; color: #ecfdf5; border: 1px solid #10b981; border-radius: 6px; padding: 4px 10px;"
-        )
         a2_v.addWidget(self.edt_akustik_onizleme)
         sol_v.addWidget(adim2_kutu, stretch=1)
 
-        # Adım 3: Dalga Formu, Teknik Ses Kontrolü (QA) ve Dinleme
         adim3_kutu = QGroupBox("Adım 3 — Stüdyo Dalga Formu (24kHz), Teknik Ses Kontrolü ve Dinleme")
         a3_v = QVBoxLayout(adim3_kutu)
         a3_v.setContentsMargins(10, 8, 10, 8)
@@ -845,7 +1108,6 @@ class MuallimunStudyoMainWindow(QMainWindow):
 
         splitter.addWidget(sol_panel)
 
-        # SAĞ PANEL: SES MOTORU, KARAKTER SEÇİMİ, ÇIKTI VE SENTEZ BUTONLARI
         sag_panel = QWidget()
         sag_panel.setMinimumWidth(320)
         sag_panel.setMaximumWidth(420)
@@ -911,7 +1173,6 @@ class MuallimunStudyoMainWindow(QMainWindow):
         m_v.addLayout(ref_btn_bar)
         sag_v.addWidget(motor_kutu)
 
-        # Çıktı ve Otomatik Numaralandırma
         cikti_kutu = QGroupBox("Çıktı ve Dosya Ayarları")
         c_v = QVBoxLayout(cikti_kutu)
         c_v.setContentsMargins(10, 8, 10, 8)
@@ -930,15 +1191,12 @@ class MuallimunStudyoMainWindow(QMainWindow):
 
         self.chk_otomatik_numaralandir = QCheckBox("🔢 Her Üretimde Dosya Numarasını Otomatik Artır")
         self.chk_otomatik_numaralandir.setChecked(False)
-        self.chk_otomatik_numaralandir.setToolTip("İşaretli olduğunda her sentez sonrası dosya adını 001 -> 002 şeklinde artırır.")
         c_v.addWidget(self.chk_otomatik_numaralandir)
         sag_v.addWidget(cikti_kutu)
 
-        # Sentez, Durdur ve Alternatif Üret Butonları
         aksiyon_bar = QHBoxLayout()
         self.btn_seslendir = QPushButton("🎙️ SESLENDİR")
         self.btn_seslendir.setFixedHeight(44)
-        self.btn_seslendir.setToolTip("Arapça metni seçili ses motoru ve 5-Katmanlı Stüdyo DSP ile sentezler (Ctrl+Enter).")
         self.btn_seslendir.setStyleSheet(
             "background-color: #10b981; color: white; border: none; border-radius: 7px; font-size: 11pt; font-weight: bold;"
         )
@@ -960,7 +1218,6 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self.btn_alternatif_uret.clicked.connect(self._alternatif_tonlamayla_uret)
         sag_v.addWidget(self.btn_alternatif_uret)
 
-        # Stüdyo Durumu ve İlerleme
         durum_kutu = QGroupBox("Stüdyo Durumu ve İlerleme")
         d_v = QVBoxLayout(durum_kutu)
         d_v.setContentsMargins(10, 8, 10, 8)
@@ -992,11 +1249,11 @@ class MuallimunStudyoMainWindow(QMainWindow):
 
         self._referans_kombolarini_doldur()
         self._referans_veya_cift_secimi_guncelle()
-        self._canli_vakif_onizleme_guncelle()
+        self._tekli_mod_degisti()
         return sayfa
 
     # ------------------------------------------------------------------
-    # SEKME 2: REFERANS SES HAVUZU YÖNETİMİ
+    # SEKME 2: REFERANS SES HAVUZU YÖNETİMİ (DETAYLI EKLEME + 24kHz ÖN-TEMİZLİK)
     # ------------------------------------------------------------------
     def _sekme_2_referans_havuzu_olustur(self) -> QWidget:
         sayfa = QWidget()
@@ -1008,7 +1265,13 @@ class MuallimunStudyoMainWindow(QMainWindow):
         ust.addWidget(QLabel("🗣️ <b>Stüdyo Referans Ses Havuzu (8 Fabrika Karakteri + Özel Eklenen Sesler):</b>"))
         ust.addStretch()
 
-        btn_ozel_ekle = QPushButton("➕ Yeni Özel Referans Ses Ekle (.wav / .mp3)")
+        btn_on_temizle_hepsi = QPushButton("✨ Tüm Referansları 24kHz Ön-Temizlikten Geçir")
+        btn_on_temizle_hepsi.setToolTip("Referans sesleri 24kHz standardında temizleyip önbelleğe alır.")
+        btn_on_temizle_hepsi.setStyleSheet("background-color: #0284c7; color: white; padding: 6px 12px;")
+        btn_on_temizle_hepsi.clicked.connect(self._tum_referanslari_on_temizle)
+        ust.addWidget(btn_on_temizle_hepsi)
+
+        btn_ozel_ekle = QPushButton("➕ Yeni Özel Referans Ses Ekle...")
         btn_ozel_ekle.setStyleSheet("background-color: #059669; color: white; padding: 6px 14px;")
         btn_ozel_ekle.clicked.connect(self._ozel_referans_ses_ekle_diyalogu)
         ust.addWidget(btn_ozel_ekle)
@@ -1032,10 +1295,14 @@ class MuallimunStudyoMainWindow(QMainWindow):
         v.addWidget(self.tablo_ses_havuzu, stretch=1)
 
         alt = QHBoxLayout()
+        btn_klasor_ozel = QPushButton("📂 Özel Sesler Klasörünü Aç")
+        btn_klasor_ozel.clicked.connect(lambda: os.startfile(str(self.config_manager.custom_voices_dir)) if os.name == "nt" else None)
+        alt.addWidget(btn_klasor_ozel)
+        alt.addStretch()
+
         btn_metin_kaydet = QPushButton("💾 Tablodaki Referans Metin Değişikliklerini Kaydet")
         btn_metin_kaydet.setStyleSheet("background-color: #0284c7; color: white; padding: 6px 14px;")
         btn_metin_kaydet.clicked.connect(self._referans_tablo_metinlerini_kaydet)
-        alt.addStretch()
         alt.addWidget(btn_metin_kaydet)
         v.addLayout(alt)
 
@@ -1043,13 +1310,13 @@ class MuallimunStudyoMainWindow(QMainWindow):
         return sayfa
 
     # ------------------------------------------------------------------
-    # SEKME 3: STÜDYO DSP & PRESET İNCE AYAR PANELİ
+    # SEKME 3: 18 PARAMETRELİ TAM STÜDYO DSP & PRESET İNCE AYAR PANELİ
     # ------------------------------------------------------------------
     def _sekme_3_dsp_ve_preset_olustur(self) -> QWidget:
         sayfa = QWidget()
         v = QVBoxLayout(sayfa)
-        v.setContentsMargins(12, 10, 12, 10)
-        v.setSpacing(10)
+        v.setContentsMargins(12, 8, 12, 8)
+        v.setSpacing(8)
 
         ust = QHBoxLayout()
         ust.addWidget(QLabel("Düzenlenecek İçerik Modu (Preset):"))
@@ -1060,14 +1327,20 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self.cmb_preset_sec.currentIndexChanged.connect(self._preset_ayarlari_forma_yukle)
         ust.addWidget(self.cmb_preset_sec, stretch=1)
 
-        btn_fabrika_don = QPushButton("🔄 Bu Modu Fabrika Ayarlarına Sıfırla")
+        btn_fabrika_don = QPushButton("🔄 Seçili Modu Fabrika Ayarlarına Sıfırla")
         btn_fabrika_don.clicked.connect(self._secili_preseti_sifirla)
         ust.addWidget(btn_fabrika_don)
+
+        btn_tumunu_sifirla = QPushButton("⚠️ Tüm Modları Sıfırla")
+        btn_tumunu_sifirla.setStyleSheet("background-color: #dc2626; color: white;")
+        btn_tumunu_sifirla.clicked.connect(self._tum_presetleri_sifirla)
+        ust.addWidget(btn_tumunu_sifirla)
         v.addLayout(ust)
 
-        grid_kutu = QGroupBox("Akustik Üretim ve 5-Katmanlı DSP Mastering Parametreleri")
-        grid = QGridLayout(grid_kutu)
-        grid.setSpacing(10)
+        # Grup 1: Akustik Sentez ve Token Parametreleri
+        sentez_kutu = QGroupBox("1. Neural Sentez, Hız, Örnekleme (Sampling) ve Token Sınırları")
+        g1 = QGridLayout(sentez_kutu)
+        g1.setSpacing(8)
 
         self.spn_p_hiz = QDoubleSpinBox()
         self.spn_p_hiz.setRange(0.75, 1.25)
@@ -1077,11 +1350,66 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self.spn_p_temp.setRange(0.45, 0.78)
         self.spn_p_temp.setSingleStep(0.02)
 
+        self.spn_p_topk = QSpinBox()
+        self.spn_p_topk.setRange(10, 100)
+
+        self.spn_p_topp = QDoubleSpinBox()
+        self.spn_p_topp.setRange(0.50, 1.00)
+        self.spn_p_topp.setSingleStep(0.02)
+
         self.spn_p_min_tok = QSpinBox()
         self.spn_p_min_tok.setRange(10, 200)
 
         self.spn_p_max_tok = QSpinBox()
         self.spn_p_max_tok.setRange(100, 1200)
+
+        self.cmb_p_kelime_turu = QComboBox()
+        self.cmb_p_kelime_turu.addItems(["genel", "isim", "fiil"])
+
+        self.cmb_p_format = QComboBox()
+        self.cmb_p_format.addItems(["wav", "mp3"])
+
+        self.spn_p_birlesik_bosluk = QSpinBox()
+        self.spn_p_birlesik_bosluk.setRange(100, 1500)
+        self.spn_p_birlesik_bosluk.setSingleStep(50)
+        self.spn_p_birlesik_bosluk.setSuffix(" ms")
+
+        g1.addWidget(QLabel("Okuma Hızı (Atempo):"), 0, 0)
+        g1.addWidget(self.spn_p_hiz, 0, 1)
+        g1.addWidget(QLabel("Sıcaklık (Temperature):"), 0, 2)
+        g1.addWidget(self.spn_p_temp, 0, 3)
+        g1.addWidget(QLabel("Top-K Örnekleme:"), 0, 4)
+        g1.addWidget(self.spn_p_topk, 0, 5)
+
+        g1.addWidget(QLabel("Top-P (Nucleus):"), 1, 0)
+        g1.addWidget(self.spn_p_topp, 1, 1)
+        g1.addWidget(QLabel("Min Yeni Token:"), 1, 2)
+        g1.addWidget(self.spn_p_min_tok, 1, 3)
+        g1.addWidget(QLabel("Maks Yeni Token:"), 1, 4)
+        g1.addWidget(self.spn_p_max_tok, 1, 5)
+
+        g1.addWidget(QLabel("Varsayılan Kelime Türü:"), 2, 0)
+        g1.addWidget(self.cmb_p_kelime_turu, 2, 1)
+        g1.addWidget(QLabel("Varsayılan Format:"), 2, 2)
+        g1.addWidget(self.cmb_p_format, 2, 3)
+        g1.addWidget(QLabel("Birleştirme Boşluğu:"), 2, 4)
+        g1.addWidget(self.spn_p_birlesik_bosluk, 2, 5)
+
+        chk_bar = QHBoxLayout()
+        self.chk_p_cift = QCheckBox("👨+👩 Varsayılan Çift Üretim (E+K)")
+        self.chk_p_hikmet = QCheckBox("🌿 Hikmetli Tefekkür Durağı (،) Ekle")
+        self.chk_p_dinamik = QCheckBox("🎭 Soru/Ünlem Dinamik Tonlama Aktif")
+        chk_bar.addWidget(self.chk_p_cift)
+        chk_bar.addWidget(self.chk_p_hikmet)
+        chk_bar.addWidget(self.chk_p_dinamik)
+        chk_bar.addStretch()
+        g1.addLayout(chk_bar, 3, 0, 1, 6)
+        v.addWidget(sentez_kutu)
+
+        # Grup 2: 5-Katmanlı Stüdyo DSP Mastering Parametreleri
+        dsp_kutu = QGroupBox("2. 5-Katmanlı 24kHz Stüdyo DSP Mastering ve Gürültü Kapısı Parametreleri")
+        g2 = QGridLayout(dsp_kutu)
+        g2.setSpacing(8)
 
         self.spn_dsp_hp = QDoubleSpinBox()
         self.spn_dsp_hp.setRange(40.0, 200.0)
@@ -1094,35 +1422,75 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self.spn_dsp_gate = QDoubleSpinBox()
         self.spn_dsp_gate.setDecimals(3)
         self.spn_dsp_gate.setRange(0.000, 0.080)
-        self.spn_dsp_gate.setSingleStep(0.005)
+        self.spn_dsp_gate.setSingleStep(0.004)
+
+        self.spn_dsp_aktif_esik = QDoubleSpinBox()
+        self.spn_dsp_aktif_esik.setDecimals(3)
+        self.spn_dsp_aktif_esik.setRange(0.005, 0.080)
+        self.spn_dsp_aktif_esik.setSingleStep(0.004)
+
+        self.spn_dsp_bas_pay = QDoubleSpinBox()
+        self.spn_dsp_bas_pay.setRange(10.0, 250.0)
+        self.spn_dsp_bas_pay.setSuffix(" ms")
+
+        self.spn_dsp_son_pay = QDoubleSpinBox()
+        self.spn_dsp_son_pay.setRange(30.0, 400.0)
+        self.spn_dsp_son_pay.setSuffix(" ms")
 
         self.spn_dsp_drive = QDoubleSpinBox()
         self.spn_dsp_drive.setRange(1.00, 1.40)
         self.spn_dsp_drive.setSingleStep(0.02)
 
-        grid.addWidget(QLabel("Okuma Hızı (Atempo / Speed):"), 0, 0)
-        grid.addWidget(self.spn_p_hiz, 0, 1)
-        grid.addWidget(QLabel("Sıcaklık (Temperature 0.50–0.78):"), 0, 2)
-        grid.addWidget(self.spn_p_temp, 0, 3)
+        self.spn_dsp_fade = QDoubleSpinBox()
+        self.spn_dsp_fade.setRange(2.0, 40.0)
+        self.spn_dsp_fade.setSuffix(" ms")
 
-        grid.addWidget(QLabel("Min Yeni Token:"), 1, 0)
-        grid.addWidget(self.spn_p_min_tok, 1, 1)
-        grid.addWidget(QLabel("Maks Yeni Token:"), 1, 2)
-        grid.addWidget(self.spn_p_max_tok, 1, 3)
+        self.spn_dsp_tepe = QDoubleSpinBox()
+        self.spn_dsp_tepe.setDecimals(3)
+        self.spn_dsp_tepe.setRange(0.500, 0.980)
+        self.spn_dsp_tepe.setSingleStep(0.010)
 
-        grid.addWidget(QLabel("DSP High-Pass Filtre (Dip Gürültü):"), 2, 0)
-        grid.addWidget(self.spn_dsp_hp, 2, 1)
-        grid.addWidget(QLabel("DSP Low-Pass Filtre (Tiz Sınırı):"), 2, 2)
-        grid.addWidget(self.spn_dsp_lp, 2, 3)
+        g2.addWidget(QLabel("High-Pass (Dip Filtre):"), 0, 0)
+        g2.addWidget(self.spn_dsp_hp, 0, 1)
+        g2.addWidget(QLabel("Low-Pass (Tiz Filtre):"), 0, 2)
+        g2.addWidget(self.spn_dsp_lp, 0, 3)
+        g2.addWidget(QLabel("RMS Gate Eşiği:"), 0, 4)
+        g2.addWidget(self.spn_dsp_gate, 0, 5)
 
-        grid.addWidget(QLabel("DSP Gürültü Kapısı (Gate Eşiği):"), 3, 0)
-        grid.addWidget(self.spn_dsp_gate, 3, 1)
-        grid.addWidget(QLabel("DSP Harmonik Doygunluk (Drive):"), 3, 2)
-        grid.addWidget(self.spn_dsp_drive, 3, 3)
+        g2.addWidget(QLabel("Kırpma (Trim) Eşiği:"), 1, 0)
+        g2.addWidget(self.spn_dsp_aktif_esik, 1, 1)
+        g2.addWidget(QLabel("Başlangıç Payı (Pad):"), 1, 2)
+        g2.addWidget(self.spn_dsp_bas_pay, 1, 3)
+        g2.addWidget(QLabel("Bitiş Payı (Pad):"), 1, 4)
+        g2.addWidget(self.spn_dsp_son_pay, 1, 5)
 
-        v.addWidget(grid_kutu)
+        g2.addWidget(QLabel("Tanh Drive (Doygunluk):"), 2, 0)
+        g2.addWidget(self.spn_dsp_drive, 2, 1)
+        g2.addWidget(QLabel("Fade In/Out Süresi:"), 2, 2)
+        g2.addWidget(self.spn_dsp_fade, 2, 3)
+        g2.addWidget(QLabel("Tepe Normalizasyon:"), 2, 4)
+        g2.addWidget(self.spn_dsp_tepe, 2, 5)
+        v.addWidget(dsp_kutu)
 
-        btn_preset_kaydet = QPushButton("💾 Preset ve DSP Ayarlarını Kaydet")
+        # Grup 3: Varsayılan Çıktı Klasörü ve Genel Stüdyo Tercihleri
+        genel_kutu = QGroupBox("3. Genel Çıktı Klasörü ve Otomatik Oynatma Tercihleri")
+        g3 = QHBoxLayout(genel_kutu)
+        g3.addWidget(QLabel("Varsayılan Çıktı Klasörü:"))
+        self.edt_genel_cikti_klasor = QLineEdit(str(self.config_manager.get_default_output_dir()))
+        g3.addWidget(self.edt_genel_cikti_klasor, stretch=1)
+
+        btn_genel_klasor_sec = QPushButton("📁 Gözat...")
+        btn_genel_klasor_sec.clicked.connect(self._genel_cikti_klasoru_sec)
+        g3.addWidget(btn_genel_klasor_sec)
+
+        self.chk_toplu_bitis_oynat = QCheckBox("🔊 Toplu İşlem Bitince Son Sesi Otomatik Çal")
+        self.chk_toplu_bitis_oynat.setChecked(
+            bool(self.config_manager.user_settings.get("otomatik_oynat_toplu_bitis", False))
+        )
+        g3.addWidget(self.chk_toplu_bitis_oynat)
+        v.addWidget(genel_kutu)
+
+        btn_preset_kaydet = QPushButton("💾 Tüm Preset, DSP ve Klasör Ayarlarını Kaydet")
         btn_preset_kaydet.setFixedHeight(36)
         btn_preset_kaydet.setStyleSheet("background-color: #059669; color: white; font-weight: bold;")
         btn_preset_kaydet.clicked.connect(self._preset_ayarlarini_kaydet)
@@ -1193,22 +1561,9 @@ class MuallimunStudyoMainWindow(QMainWindow):
         self.lbl_gpu_durum.setToolTip(bilgi.get("oneri_metni", ""))
 
     def _gpu_optimize_diyalogu_ac(self) -> None:
-        mevcut = self.config_manager.user_settings.get("zorunlu_donanim_kademesi", "OTOMATIK")
-        sonuc = gpu_bellegini_optimize_et(
-            studyo_motor=self.studyo_motor,
-            zorunlu_kademe_kodu=None if mevcut == "OTOMATIK" else mevcut,
-        )
+        dlg = GpuKademeSecimDialog(self.config_manager, self.studyo_motor, parent=self)
+        dlg.exec()
         self.gpu_durumunu_guncelle()
-        prof = sonuc.get("profil_detay", {})
-        QMessageBox.information(
-            self,
-            "GPU ve Bellek Optimize Edildi",
-            f"Ekran kartı önbelleği temizlendi.\n\n"
-            f"• Cihaz: {sonuc.get('cihaz_adi')}\n"
-            f"• Boş / Toplam VRAM: {sonuc.get('bos_gb', 0)} GB / {sonuc.get('toplam_gb', 0)} GB\n"
-            f"• Aktif Kademe: {prof.get('ad', '')}\n"
-            f"• Açıklama: {prof.get('aciklama', '')}",
-        )
 
     def _kurulum_sihirbazini_ac(self) -> None:
         dlg = SetupWizardDialog(self.config_manager, parent=self)
@@ -1334,7 +1689,6 @@ class MuallimunStudyoMainWindow(QMainWindow):
                 QMessageBox.information(self, "Meşgul", "Önceki sentez durduruluyor, lütfen 1 saniye sonra tekrar deneyin.")
                 return
 
-        # Windows dosya kilidini önlemek için aktif çalan sesi durdur
         self.ses_oynatici.durdur()
 
         akustik = self.edt_akustik_onizleme.text().strip() or arapca_akustik_metin_hazirla(arapca)
@@ -1497,7 +1851,7 @@ class MuallimunStudyoMainWindow(QMainWindow):
         dlg.exec()
 
     # ------------------------------------------------------------------
-    # REFERANS HAVUZU VE PRESET METOTLARI
+    # REFERANS HAVUZU VE TAM PRESET/DSP METOTLARI
     # ------------------------------------------------------------------
     def _referans_havuzu_tablosunu_yenile(self) -> None:
         havuz = self.config_manager.voice_pool
@@ -1515,7 +1869,7 @@ class MuallimunStudyoMainWindow(QMainWindow):
                 r_idx, 2, QTableWidgetItem(f"{ses.get('cinsiyet', 'E')} / {ses.get('kategori', '')}")
             )
 
-            durum_it = QTableWidgetItem("✅ Hazır" if var_mi else "❌ Dosya Eksik")
+            durum_it = QTableWidgetItem("✅ Hazır (24kHz)" if var_mi else "❌ Dosya Eksik")
             durum_it.setForeground(QColor("#10b981") if var_mi else QColor("#ef4444"))
             self.tablo_ses_havuzu.setItem(r_idx, 3, durum_it)
 
@@ -1529,28 +1883,33 @@ class MuallimunStudyoMainWindow(QMainWindow):
             btn_dinle.clicked.connect(lambda checked=False, p=str(yol): self.ses_dosyasini_cal(p))
             self.tablo_ses_havuzu.setCellWidget(r_idx, 5, btn_dinle)
 
-    def _ozel_referans_ses_ekle_diyalogu(self) -> None:
-        dosya, _ = QFileDialog.getOpenFileName(
+    def _tum_referanslari_on_temizle(self) -> None:
+        sayac = 0
+        for ses in self.config_manager.voice_pool:
+            yol = self.config_manager.resolve_voice_path(ses["id"])
+            if yol.exists():
+                try:
+                    referans_sesi_on_temizle(yol)
+                    sayac += 1
+                except Exception as e:
+                    self._teknik_log_ekle(f"⚠️ Ön-temizlik hatası ({yol.name}): {e}")
+        self._referans_havuzu_tablosunu_yenile()
+        QMessageBox.information(
             self,
-            "Özel Referans Ses Dosyası Seç (5-15 Saniyelik Net Konuşma)",
-            str(Path.home() / "Desktop"),
-            "Ses Dosyaları (*.wav *.mp3 *.flac *.ogg)",
+            "24kHz Ön-Temizlik Tamamlandı",
+            f"Toplam {sayac} referans ses dosyası 24kHz standardında ön-temizlikten geçirilip önbelleğe alındı.",
         )
-        if not dosya:
-            return
-        try:
-            gorunen_ad = f"Özel Karakter ({Path(dosya).stem[:18]})"
-            yeni = self.config_manager.add_custom_voice(dosya, gorunen_ad=gorunen_ad, cinsiyet="E", kategori="yetiskin_E")
+
+    def _ozel_referans_ses_ekle_diyalogu(self) -> None:
+        dlg = OzelReferansSesEkleDialog(self.config_manager, self.ses_oynatici, parent=self)
+        if dlg.exec() == QDialog.Accepted and dlg.eklenen_kayit:
             self._referans_havuzu_tablosunu_yenile()
             self._referans_kombolarini_doldur()
             QMessageBox.information(
                 self,
                 "Özel Ses Eklendi",
-                f"'{yeni['ad']}' 24kHz PCM_16 WAV formatına dönüştürülerek ses havuzuna eklendi.\n"
-                "Tablodaki 'Referans Arapça Metin' sütununa bu seste okunan Arapça cümleyi yazıp kaydedebilirsiniz.",
+                f"'{dlg.eklenen_kayit['ad']}' 24kHz PCM_16 WAV formatına dönüştürülerek ses havuzuna eklendi.",
             )
-        except Exception as e:
-            QMessageBox.critical(self, "Ses Ekleme Hatası", str(e))
 
     def _secili_ozel_sesi_sil(self) -> None:
         row = self.tablo_ses_havuzu.currentRow()
@@ -1571,41 +1930,100 @@ class MuallimunStudyoMainWindow(QMainWindow):
                 self.config_manager.update_voice_prompt_text(vid, metin.strip())
         QMessageBox.information(self, "Kaydedildi", "Referans ses metinleri başarıyla güncellendi.")
 
+    def _genel_cikti_klasoru_sec(self) -> None:
+        secilen = QFileDialog.getExistingDirectory(self, "Varsayılan Çıktı Klasörü Seç", self.edt_genel_cikti_klasor.text())
+        if secilen:
+            self.edt_genel_cikti_klasor.setText(secilen)
+
     def _preset_ayarlari_forma_yukle(self) -> None:
         kod = self.cmb_preset_sec.currentData() or "cumle"
         p = self.config_manager.get_preset(kod)
         dsp = p.get("dsp", {})
+
         self.spn_p_hiz.setValue(float(p.get("hiz", 0.92)))
         self.spn_p_temp.setValue(float(p.get("temperature", 0.64)))
+        self.spn_p_topk.setValue(int(p.get("top_k", 50)))
+        self.spn_p_topp.setValue(float(p.get("top_p", 0.94)))
         self.spn_p_min_tok.setValue(int(p.get("min_tokens", 25)))
         self.spn_p_max_tok.setValue(int(p.get("max_tokens", 550)))
+
+        idx_kt = self.cmb_p_kelime_turu.findText(str(p.get("kelime_turu", "genel")))
+        if idx_kt >= 0:
+            self.cmb_p_kelime_turu.setCurrentIndex(idx_kt)
+
+        idx_fmt = self.cmb_p_format.findText(str(p.get("varsayilan_format", "wav")).lower())
+        if idx_fmt >= 0:
+            self.cmb_p_format.setCurrentIndex(idx_fmt)
+
+        self.spn_p_birlesik_bosluk.setValue(int(p.get("birlesik_bosluk_ms", 350)))
+        self.chk_p_cift.setChecked(bool(p.get("cift_uretim_erkek_kadin", True)))
+        self.chk_p_hikmet.setChecked(bool(p.get("hikmetli_durak_ekle", False)))
+        self.chk_p_dinamik.setChecked(bool(p.get("dinamik_tonlama", True)))
+
         self.spn_dsp_hp.setValue(float(dsp.get("hp_freq", 85.0)))
         self.spn_dsp_lp.setValue(float(dsp.get("lp_freq", 11200.0)))
         self.spn_dsp_gate.setValue(float(dsp.get("gate_esigi", 0.028)))
+        self.spn_dsp_aktif_esik.setValue(float(dsp.get("aktif_esik_katsayi", 0.024)))
+        self.spn_dsp_bas_pay.setValue(float(dsp.get("bas_pay_ms", 55.0)))
+        self.spn_dsp_son_pay.setValue(float(dsp.get("son_pay_ms", 170.0)))
         self.spn_dsp_drive.setValue(float(dsp.get("drive", 1.12)))
+        self.spn_dsp_fade.setValue(float(dsp.get("fade_ms", 10.0)))
+        self.spn_dsp_tepe.setValue(float(dsp.get("tepe_normalizasyon", 0.891)))
 
     def _preset_ayarlarini_kaydet(self) -> None:
         kod = self.cmb_preset_sec.currentData() or "cumle"
         yeni = {
             "hiz": round(self.spn_p_hiz.value(), 2),
             "temperature": round(self.spn_p_temp.value(), 2),
+            "top_k": int(self.spn_p_topk.value()),
+            "top_p": round(self.spn_p_topp.value(), 2),
             "min_tokens": int(self.spn_p_min_tok.value()),
             "max_tokens": int(min(1200, max(self.spn_p_min_tok.value() + 20, self.spn_p_max_tok.value()))),
+            "kelime_turu": self.cmb_p_kelime_turu.currentText(),
+            "varsayilan_format": self.cmb_p_format.currentText(),
+            "birlesik_bosluk_ms": int(self.spn_p_birlesik_bosluk.value()),
+            "cift_uretim_erkek_kadin": self.chk_p_cift.isChecked(),
+            "hikmetli_durak_ekle": self.chk_p_hikmet.isChecked(),
+            "dinamik_tonlama": self.chk_p_dinamik.isChecked(),
             "dsp": {
                 "hp_freq": round(self.spn_dsp_hp.value(), 1),
                 "lp_freq": round(self.spn_dsp_lp.value(), 1),
                 "gate_esigi": round(self.spn_dsp_gate.value(), 3),
+                "aktif_esik_katsayi": round(self.spn_dsp_aktif_esik.value(), 3),
+                "bas_pay_ms": round(self.spn_dsp_bas_pay.value(), 1),
+                "son_pay_ms": round(self.spn_dsp_son_pay.value(), 1),
                 "drive": round(self.spn_dsp_drive.value(), 2),
+                "fade_ms": round(self.spn_dsp_fade.value(), 1),
+                "tepe_normalizasyon": round(self.spn_dsp_tepe.value(), 3),
             },
         }
+        self.config_manager.user_settings["varsayilan_cikti_klasoru"] = self.edt_genel_cikti_klasor.text().strip() or "cikti_sesler"
+        self.config_manager.user_settings["otomatik_oynat_toplu_bitis"] = self.chk_toplu_bitis_oynat.isChecked()
         self.config_manager.save_user_preset(kod, yeni)
-        QMessageBox.information(self, "Kaydedildi", f"'{kod}' modu için yeni stüdyo ayarları kaydedildi.")
+
+        if hasattr(self, "sekme_4_toplu"):
+            self.sekme_4_toplu.edt_toplu_cikti.setText(str(self.config_manager.get_default_output_dir()))
+
+        QMessageBox.information(self, "Kaydedildi", f"'{kod}' modu için tüm akustik, DSP ve klasör ayarları kaydedildi.")
 
     def _secili_preseti_sifirla(self) -> None:
         kod = self.cmb_preset_sec.currentData() or "cumle"
         self.config_manager.reset_preset_to_factory(kod)
         self._preset_ayarlari_forma_yukle()
         QMessageBox.information(self, "Sıfırlandı", "Seçili mod fabrika ayarlarına döndürüldü.")
+
+    def _tum_presetleri_sifirla(self) -> None:
+        cevap = QMessageBox.question(
+            self,
+            "Tüm Modları Sıfırla",
+            "5 içerik modunun tamamını varsayılan fabrika ayarlarına döndürmek istiyor musunuz?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if cevap == QMessageBox.Yes:
+            self.config_manager.reset_all_to_factory()
+            self._preset_ayarlari_forma_yukle()
+            QMessageBox.information(self, "Sıfırlandı", "Tüm modlar fabrika ayarlarına döndürüldü.")
 
     # ------------------------------------------------------------------
     # GÜVENLİ KAPATMA (closeEvent — AKTİF İŞÇİ VE VRAM TEMİZLİĞİ)
