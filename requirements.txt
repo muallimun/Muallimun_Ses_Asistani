@@ -1,0 +1,22 @@
+# Muallimun AI Ses Stüdyosu Pro - Python 3.12 Bağımlılık Listesi
+# PyTorch CUDA 12.1 kurulumu için:
+# pip install torch==2.5.1+cu121 torchaudio==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121
+
+PySide6>=6.7.0
+numpy>=1.26.0
+scipy>=1.13.0
+soundfile>=0.12.1
+librosa>=0.10.2
+soxr>=0.3.7
+transformers==4.48.3
+accelerate==1.2.1
+huggingface_hub>=0.26.0
+einops>=0.8.0
+einx>=0.3.0
+omegaconf>=2.3.0
+edge-tts>=6.1.12
+openpyxl>=3.1.5
+six>=1.16.0
+
+# Opsiyonel Alternatif Motor:
+# coqui-tts>=0.25.0

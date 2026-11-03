@@ -1,0 +1,40 @@
+# Python önbellek ve derleme dosyaları
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+build/
+dist/
+installer_output/
+runtime/
+
+# Sanal ortamlar
+venv/
+.venv/
+env/
+
+# Stüdyo çalışma zamanı önbellekleri ve yerel veritabanı
+.studyo_ref_cache*/
+config/studyo_checkpoints.db
+config/studyo_checkpoints.db-wal
+config/studyo_checkpoints.db-shm
+config/*.tmp
+config/*.bak
+config/*.corrupt
+config/user_settings.json
+
+# Üretilen ses çıktıları ve özel eklenen referans sesler
+cikti_sesler/
+public/sesler/
+referans_sesler_ozel/*.wav
+referans_sesler_ozel/*.mp3
+
+# Temel 8 stüdyo referans sesini repoda koru
+!ref_erkek_1.wav
+!ref_erkek_2.wav
+!ref_kadin_1.wav
+!ref_kadin_2.wav
+!ref_erkek_cocuk_1.wav
+!ref_erkek_cocuk_2.wav
+!ref_kiz_cocuk_1.wav
+!ref_kiz_cocuk_2.wav

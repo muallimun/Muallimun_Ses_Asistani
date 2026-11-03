@@ -1,0 +1,6 @@
+{
+  "version": "1.2.0",
+  "release_date": "2026-11-03",
+  "download_url": "https://github.com/muallimun/Muallimun_Ses_Asistani/releases/latest",
+  "notes": "v1.2.0 Sürüm Notları:\n• Spark-TTS (24kHz BiCodec) ana stüdyo motoru varsayılan yapıldı.\n• Seçmeli Kelime/Cümle/Diyalog seslendirme ve kuyruk filtreleme eklendi.\n• Aydınlık ve Karanlık stüdyo teması (Light/Dark Mode) eklendi.\n• 4 GB VRAM ekran kartları için otomatik bellek tahliyesi ve gerçek Teknik Ses QA eklendi.\n• İlk açılış 5 adımlı Başlangıç Turu ve Kapsamlı Kullanım Kılavuzu eklendi."
+}
