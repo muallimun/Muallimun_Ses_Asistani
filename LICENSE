@@ -1,0 +1,47 @@
+MIT License
+
+Copyright (c) 2026 Muallimun Dijital Eğitim Teknolojileri (muallimun.net)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+ÜÇÜNCÜ TARAF YAPAY ZEKA MODELLERİ VE BİLEŞENLERİ LİSANS BİLDİRİMİ
+(THIRD-PARTY AI MODELS & COMPONENTS NOTICE)
+================================================================================
+
+Bu yazılımın kaynak kodları MIT Lisansı altındadır. Ancak yazılımın çalışma
+zamanında (runtime) kullanıcının talebiyle indirdiği veya bağlandığı üçüncü
+taraf yapay zeka ses modelleri ve araçları kendi orijinal lisanslarına tabidir:
+
+1. IbrahimSalah/Arabic-TTS-Spark (Spark-TTS 24kHz BiCodec Modeli):
+   - Kaynak: https://huggingface.co/IbrahimSalah/Arabic-TTS-Spark
+   - Lisans: Non-Commercial License (Ticari Olmayan Eğitim ve Araştırma Kullanımı).
+   - Ticari kullanım için model sahibinden ayrıca izin alınmalıdır.
+
+2. Coqui XTTS v2 (tts_models/multilingual/multi-dataset/xtts_v2):
+   - Kaynak: https://huggingface.co/coqui/XTTS-v2
+   - Lisans: Coqui Public Model License (CPML) — Ticari olmayan kullanım.
+
+3. Edge-TTS (Çevrimiçi Hızlı Direkt TTS):
+   - Kaynak: https://github.com/rany2/edge-tts
+   - Lisans: GPL-3.0 / Microsoft Edge Çevrimiçi Ses Servisi Kullanım Koşulları.
+
+4. FFmpeg:
+   - Kaynak: https://ffmpeg.org/
+   - Lisans: LGPL v2.1+ / GPL v2+ (Harici sistem aracı olarak çağrılır).
