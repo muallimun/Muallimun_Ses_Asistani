@@ -6,11 +6,10 @@ Dosya: ui/rehber_ve_guncelleyici.py
 Özellikler:
   1. Merkezi Aydınlık (Light) ve Karanlık (Dark) Stüdyo Teması QSS Üreticisi
   2. İlk Açılış 5 Adımlı Etkileşimli Başlangıç Turu + Canlı Sistem Sağlığı Denetim Kartı
-  3. 6 Sekmeli Kapsamlı Tanıtım Rehberi ve Kullanım Kılavuzu (+ HTML Olarak Dışa Aktarma)
-  4. GitHub Üzerinden Arka Planda Otomatik Yeni Versiyon Kontrolü (version.json & Releases API)
+  3. 6 Sekmesi Tam Görünür Kapsamlı Tanıtım Rehberi ve Kullanım Kılavuzu (+ HTML Olarak Dışa Aktarma)
+  4. GitHub Üzerinden Arka Planda Otomatik Yeni Versiyon Kontrolü (muallimun/Muallimun_Ses_Asistani)
 """
 
-import os
 import re
 import json
 import shutil
@@ -20,7 +19,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 from PySide6.QtCore import Qt, QThread, Signal, QUrl
-from PySide6.QtGui import QFont, QDesktopServices
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QWidget,
@@ -32,16 +31,16 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTextBrowser,
     QStackedWidget,
-    QFrame,
     QLineEdit,
     QFileDialog,
     QMessageBox,
 )
 
-from core.config_manager import ConfigManager, PROJECT_ROOT
+from core.config_manager import ConfigManager
 from core.studyo_motoru import gpu_vram_durumu_getir
 
 APP_VERSION = "1.2.0"
+VARSAYILAN_GITHUB_REPO = "muallimun/Muallimun_Ses_Asistani"
 
 
 # ==============================================================================
@@ -84,8 +83,8 @@ def studyo_tema_qss_olustur(tema_kodu: str = "koyu") -> str:
                 background-color: #e2e8f0;
                 color: #475569;
                 border: 1px solid #cbd5e1;
-                padding: 8px 16px;
-                margin-right: 4px;
+                padding: 7px 13px;
+                margin-right: 3px;
                 border-top-left-radius: 7px;
                 border-top-right-radius: 7px;
                 font-weight: bold;
@@ -128,7 +127,7 @@ def studyo_tema_qss_olustur(tema_kodu: str = "koyu") -> str:
                 color: #0f172a;
                 border: 1px solid #94a3b8;
                 border-radius: 6px;
-                padding: 5px 12px;
+                padding: 5px 10px;
                 font-weight: bold;
             }
             QPushButton:hover {
@@ -185,7 +184,6 @@ def studyo_tema_qss_olustur(tema_kodu: str = "koyu") -> str:
             }
         """
 
-    # Varsayılan: Koyu Stüdyo Teması
     return """
         QMainWindow, QDialog, QWidget {
             background-color: #0b0f19;
@@ -217,8 +215,8 @@ def studyo_tema_qss_olustur(tema_kodu: str = "koyu") -> str:
             background-color: #111827;
             color: #94a3b8;
             border: 1px solid #1e293b;
-            padding: 8px 16px;
-            margin-right: 4px;
+            padding: 7px 13px;
+            margin-right: 3px;
             border-top-left-radius: 7px;
             border-top-right-radius: 7px;
             font-weight: bold;
@@ -261,7 +259,7 @@ def studyo_tema_qss_olustur(tema_kodu: str = "koyu") -> str:
             color: #f8fafc;
             border: 1px solid #334155;
             border-radius: 6px;
-            padding: 5px 12px;
+            padding: 5px 10px;
             font-weight: bold;
         }
         QPushButton:hover {
@@ -337,7 +335,6 @@ class BaslangicTuruDialog(QDialog):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        # Üst Başlık ve Adım Göstergesi
         ust_bar = QHBoxLayout()
         self.lbl_baslik = QLabel("🎓 Hoş Geldiniz — 5 Adımda Stüdyo Başlangıç Turu")
         self.lbl_baslik.setStyleSheet("font-size: 13pt; font-weight: bold; color: #10b981;")
@@ -355,7 +352,6 @@ class BaslangicTuruDialog(QDialog):
         self._sayfalari_olustur()
         layout.addWidget(self.stack, stretch=1)
 
-        # Alt Gezinme Çubuğu
         alt_bar = QHBoxLayout()
         self.chk_bir_daha_gosterme = QCheckBox("Açılışta bu başlangıç turunu bir daha otomatik gösterme")
         self.chk_bir_daha_gosterme.setChecked(True)
@@ -434,7 +430,7 @@ class BaslangicTuruDialog(QDialog):
                     <td><span style='color:#10b981; font-weight:bold;'>IbrahimSalah/Arabic-TTS-Spark (24kHz BiCodec Klonlama)</span></td>
                 </tr>
             </table>
-            <p style='margin-top:10px;'>💡 <b>İpucu:</b> Üst bardaki <b>☀️ Aydınlık / 🌙 Koyu</b> butonuyla istediğiniz zaman göz konforunuza uygun temaya geçebilirsiniz.</p>
+            <p style='margin-top:10px;'>💡 <b>İpucu:</b> Üst bardaki <b>☀️ / 🌙</b> ikon butonuyla istediğiniz zaman göz konforunuza uygun temaya geçebilirsiniz.</p>
         </div>
         """
 
@@ -449,10 +445,8 @@ class BaslangicTuruDialog(QDialog):
         return sayfa
 
     def _sayfalari_olustur(self) -> None:
-        # Sayfa 1: Sistem Sağlığı
         self.stack.addWidget(self._sayfa_widget_olustur(self._sistem_sagligi_html_uret()))
 
-        # Sayfa 2: Ses Motoru Seçimi Rehberi
         sayfa2_html = """
         <div style='line-height: 1.6; font-size: 10.5pt;'>
             <h3 style='color:#0284c7;'>🧠 Adım 2: Hangi Ses Motorunu Ne Zaman Kullanmalıyım?</h3>
@@ -475,7 +469,6 @@ class BaslangicTuruDialog(QDialog):
         """
         self.stack.addWidget(self._sayfa_widget_olustur(sayfa2_html))
 
-        # Sayfa 3: Tekli Stüdyo ve Vakıf Kuralları
         sayfa3_html = """
         <div style='line-height: 1.6; font-size: 10.5pt;'>
             <h3 style='color:#0284c7;'>🎙️ Adım 3: Tekli Seslendirme Stüdyosu ve Canlı Vakıflı Okunuş</h3>
@@ -486,13 +479,12 @@ class BaslangicTuruDialog(QDialog):
                 <li><b>🔍 Canlı Vakıflı Okunuş Kutusu:</b> Stüdyo motoru Arapça imla kurallarına göre cümle sonundaki
                 <i>tâ-i merbûtayı (ة -> هْ)</i>, <i>fetha tenvini (ـًا -> ـَا)</i> ve <i>son harekeyi sükûna</i> otomatik dönüştürür.
                 Dilerseniz yeşil kutudaki okunuş metnini elle de düzenleyebilirsiniz.</li>
-                <li><b>Teknik Ses Kontrolü (QA):</b> Üretilen sesin süresi, tepe seviyesi (dBFS) ve sinyal enerjisi dalga formu üzerinde otomatik denetlenir.</li>
+                <li><b>Uzman Mod İnce Ayarı:</b> Üst bardan <b>Uzman Mod</b>'a geçtiğinizde sağ panelde anlık <b>Hız</b> ve <b>Sıcaklık (Temp)</b> ince ayar kutuları açılır.</li>
             </ol>
         </div>
         """
         self.stack.addWidget(self._sayfa_widget_olustur(sayfa3_html))
 
-        # Sayfa 4: Toplu Seslendirme ve Seçmeli Satır Üretimi
         sayfa4_html = """
         <div style='line-height: 1.6; font-size: 10.5pt;'>
             <h3 style='color:#0284c7;'>📦 Adım 4: Toplu Seslendirme ve Seçmeli Satır / Aralık Üretimi</h3>
@@ -510,7 +502,6 @@ class BaslangicTuruDialog(QDialog):
         """
         self.stack.addWidget(self._sayfa_widget_olustur(sayfa4_html))
 
-        # Sayfa 5: Çoklu Rol Diyalog ve Uzun Metin Stüdyosu
         sayfa5_html = """
         <div style='line-height: 1.6; font-size: 10.5pt;'>
             <h3 style='color:#0284c7;'>🎭 Adım 5: Çoklu Rol Diyalog (8 Karakter) ve Uzun Metin Stüdyosu</h3>
@@ -555,18 +546,21 @@ class BaslangicTuruDialog(QDialog):
 
 
 # ==============================================================================
-# 3. KAPSAMLI TANITIM REHBERİ VE KULLANIM KILAVUZU PENCERESİ
+# 3. KAPSAMLI TANITIM REHBERİ VE KULLANIM KILAVUZU PENCERESİ (6 SEKME TAM GÖRÜNÜR)
 # ==============================================================================
 class KullanimKilavuzuDialog(QDialog):
     def __init__(self, config_manager: ConfigManager, parent=None):
         super().__init__(parent)
         self.config_manager = config_manager
         self.setWindowTitle("📘 Muallimun AI Ses Stüdyosu Pro — Kapsamlı Tanıtım Rehberi ve Kullanım Kılavuzu")
-        self.setMinimumSize(940, 620)
-        self.resize(1040, 680)
+        self.setMinimumSize(1020, 620)
+        self.resize(1120, 680)
 
         tema = self.config_manager.user_settings.get("tema_modu", "koyu")
-        self.setStyleSheet(studyo_tema_qss_olustur(tema))
+        self.setStyleSheet(
+            studyo_tema_qss_olustur(tema)
+            + "\nQTabBar::tab { padding: 7px 11px; font-size: 9.2pt; }"
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -574,7 +568,7 @@ class KullanimKilavuzuDialog(QDialog):
 
         ust = QHBoxLayout()
         lbl = QLabel("📘 MUALLİMUN AI SES STÜDYOSU PRO — KULLANIM KILAVUZU VE TEKNİK REHBER")
-        lbl.setStyleSheet("font-size: 12pt; font-weight: bold; color: #0284c7;")
+        lbl.setStyleSheet("font-size: 11.5pt; font-weight: bold; color: #0284c7;")
         ust.addWidget(lbl)
         ust.addStretch()
 
@@ -589,6 +583,7 @@ class KullanimKilavuzuDialog(QDialog):
         layout.addLayout(ust)
 
         self.tabs = QTabWidget()
+        self.tabs.tabBar().setUsesScrollButtons(False)
         self._sekmeleri_hazirla()
         layout.addWidget(self.tabs, stretch=1)
 
@@ -617,7 +612,7 @@ class KullanimKilavuzuDialog(QDialog):
 
     def _sekmeleri_hazirla(self) -> None:
         self._sekme_ekle(
-            "1. 🌟 Genel Bakış & Modeller",
+            "1. 🌟 Genel && Modeller",
             """
             <div style='line-height:1.6; font-size:10pt;'>
                 <h2 style='color:#0284c7;'>Muallimun AI Ses Stüdyosu Pro Nedir?</h2>
@@ -638,7 +633,7 @@ class KullanimKilavuzuDialog(QDialog):
         )
 
         self._sekme_ekle(
-            "2. 🕌 Arapça Vakıf & Fonetik",
+            "2. 🕌 Vakıf && Fonetik",
             """
             <div style='line-height:1.6; font-size:10pt;'>
                 <h2 style='color:#0284c7;'>Fasih Arapça Vakıf ve Vasıl Ön-İşleme Motoru</h2>
@@ -656,7 +651,7 @@ class KullanimKilavuzuDialog(QDialog):
         )
 
         self._sekme_ekle(
-            "3. 📦 Toplu Üretim & Şablonlar",
+            "3. 📦 Toplu && Şablonlar",
             """
             <div style='line-height:1.6; font-size:10pt;'>
                 <h2 style='color:#0284c7;'>Toplu Seslendirme, Seçmeli Kuyruk ve Şablon Formatları</h2>
@@ -680,7 +675,7 @@ class KullanimKilavuzuDialog(QDialog):
         )
 
         self._sekme_ekle(
-            "4. 🎭 Diyalog & Uzun Metin",
+            "4. 🎭 Diyalog && Metin",
             """
             <div style='line-height:1.6; font-size:10pt;'>
                 <h2 style='color:#0284c7;'>Çoklu Rol Diyalog (8 Karakter) ve Uzun Metin Stüdyosu</h2>
@@ -697,7 +692,7 @@ class KullanimKilavuzuDialog(QDialog):
         )
 
         self._sekme_ekle(
-            "5. 🎚️ DSP Mastering & Teknik QA",
+            "5. 🎚️ DSP && Kalite (QA)",
             """
             <div style='line-height:1.6; font-size:10pt;'>
                 <h2 style='color:#0284c7;'>5-Katmanlı Stüdyo DSP Mastering ve Teknik Ses Kontrolü</h2>
@@ -713,7 +708,7 @@ class KullanimKilavuzuDialog(QDialog):
         )
 
         self._sekme_ekle(
-            "6. ⌨️ Kısayollar & Sorun Giderme",
+            "6. ⌨️ Kısayollar && SSS",
             """
             <div style='line-height:1.6; font-size:10pt;'>
                 <h2 style='color:#0284c7;'>Klavye Kısayolları ve Sık Karşılaşılan Sorunlar</h2>
@@ -751,7 +746,7 @@ class KullanimKilavuzuDialog(QDialog):
                 f"<h1>🎙️ Muallimun AI Ses Stüdyosu Pro (v{APP_VERSION}) — Kapsamlı Kullanım Kılavuzu</h1>",
             ]
             for i in range(self.tabs.count()):
-                baslik = self.tabs.tabText(i)
+                baslik = self.tabs.tabText(i).replace("&&", "&")
                 sayfa = self.tabs.widget(i)
                 tarayici = sayfa.findChild(QTextBrowser)
                 icerik = tarayici.toHtml() if tarayici else ""
@@ -775,9 +770,9 @@ def _surum_tuple_cevir(surum_str: str) -> Tuple[int, ...]:
 class GitHubGuncellemeKontrolWorker(QThread):
     sonuc_sinyali = Signal(bool, dict)
 
-    def __init__(self, github_repo: str, mevcut_surum: str = APP_VERSION):
+    def __init__(self, github_repo: str = VARSAYILAN_GITHUB_REPO, mevcut_surum: str = APP_VERSION):
         super().__init__()
-        self.github_repo = str(github_repo or "muallimun/Muallimun_Ses_Asistani").strip().strip("/")
+        self.github_repo = str(github_repo or VARSAYILAN_GITHUB_REPO).strip().strip("/")
         self.mevcut_surum = mevcut_surum
 
     def run(self) -> None:
@@ -785,7 +780,6 @@ class GitHubGuncellemeKontrolWorker(QThread):
             "User-Agent": f"MuallimunStudyoPro/{self.mevcut_surum}",
             "Accept": "application/vnd.github.v3+json",
         }
-        # 1. Önce repodaki version.json dosyasını kontrol et
         raw_url = f"https://raw.githubusercontent.com/{self.github_repo}/main/version.json"
         api_url = f"https://api.github.com/repos/{self.github_repo}/releases/latest"
 
@@ -799,14 +793,13 @@ class GitHubGuncellemeKontrolWorker(QThread):
                     "yeni_surum_var": yeni_var,
                     "mevcut_surum": self.mevcut_surum,
                     "uzak_surum": uzak_surum,
-                    " yayin_notlari": str(veri.get("notes", "")),
+                    "yayin_notlari": str(veri.get("notes", "")),
                     "indir_url": str(veri.get("download_url", f"https://github.com/{self.github_repo}/releases")),
                 })
                 return
         except Exception:
             pass
 
-        # 2. Yedek: GitHub Releases API kontrolü
         try:
             req2 = urllib.request.Request(api_url, headers=headers)
             with urllib.request.urlopen(req2, timeout=6) as resp2:
@@ -829,11 +822,18 @@ class GitHubGuncellemeKontrolWorker(QThread):
 
 
 class GuncellemeKontrolDialog(QDialog):
-    def __init__(self, config_manager: ConfigManager, otomatik_bildirim_mi: bool = False, bilgisiz_bilgi: Optional[Dict[str, Any]] = None, parent=None):
+    def __init__(
+        self,
+        config_manager: ConfigManager,
+        otomatik_bildirim_mi: bool = False,
+        bilgisiz_bilgi: Optional[Dict[str, Any]] = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.config_manager = config_manager
         self.worker: Optional[GitHubGuncellemeKontrolWorker] = None
-        self.indir_url = f"https://github.com/{self.config_manager.user_settings.get('github_repo', 'muallimun/Muallimun_Ses_Asistani')}"
+        repo_varsayilan = self.config_manager.user_settings.get("github_repo", VARSAYILAN_GITHUB_REPO)
+        self.indir_url = f"https://github.com/{repo_varsayilan}"
 
         self.setWindowTitle("🔄 GitHub Sürüm ve Güncelleme Kontrolü")
         self.setMinimumSize(620, 380)
@@ -852,7 +852,7 @@ class GuncellemeKontrolDialog(QDialog):
 
         repo_bar = QHBoxLayout()
         repo_bar.addWidget(QLabel("GitHub Deposu:"))
-        self.edt_repo = QLineEdit(self.config_manager.user_settings.get("github_repo", "muallimun/Muallimun_Ses_Asistani"))
+        self.edt_repo = QLineEdit(repo_varsayilan)
         repo_bar.addWidget(self.edt_repo, stretch=1)
 
         self.btn_denetle = QPushButton("🔍 Şimdi Kontrol Et")
@@ -898,7 +898,7 @@ class GuncellemeKontrolDialog(QDialog):
     def guncelleme_sorgula(self) -> None:
         if self.worker and self.worker.isRunning():
             return
-        repo = self.edt_repo.text().strip() or "muallimun/Muallimun_Ses_Asistani"
+        repo = self.edt_repo.text().strip() or VARSAYILAN_GITHUB_REPO
         self.config_manager.user_settings["github_repo"] = repo
         self.config_manager.save_user_settings()
 
@@ -921,7 +921,7 @@ class GuncellemeKontrolDialog(QDialog):
             return
 
         uzak = bilgi.get("uzak_surum", APP_VERSION)
-        notlar = bilgi.get("yayin_notlari") or bilgi.get(" yayin_notlari") or "Değişiklik notu belirtilmemiş."
+        notlar = bilgi.get("yayin_notlari") or "Değişiklik notu belirtilmemiş."
         if bilgi.get("yeni_surum_var"):
             self.lbl_durum.setText(f"🎉 Yeni Sürüm Mevcut: v{uzak} (Mevcut: v{APP_VERSION})")
             self.lbl_durum.setStyleSheet("color: #10b981; font-weight: bold; font-size: 10.5pt;")
