@@ -56,9 +56,10 @@ ShowLanguageDialog=auto
 ; Sıkıştırma ve 2 GB Üstü Büyük Paket / GitHub Releases (<2GB) Desteği
 ; NOT: Eğer tek bir .exe dosyası üretmek isterseniz aşağıdaki DiskSpanning=yes
 ; satırını DiskSpanning=no yapabilirsiniz (Sıkışmış boyut 2.0 GB altında kalırsa tek .exe olur).
-Compression=lzma2/ultra64
-LZMADictionarySize=65536
-LZMANumBlockThreads=4
+Compression=lzma2/fast
+LZMADictionarySize=16384
+LZMANumBlockThreads=2
+LZMAUseSeparateProcess=yes
 SolidCompression=no
 DiskSpanning=yes
 DiskSliceSize=1950000000
@@ -82,7 +83,7 @@ Name: "{app}\referans_sesler_ozel"; Permissions: users-modify; Flags: uninsnever
 [Files]
 ; 1. Ana EXE, _internal kütüphaneleri, ffmpeg.exe ve 8 referans WAV dosyası
 ; (config klasörü hariç tüm derleme dizini)
-Source: "{#MyDistDir}\*"; DestDir: "{app}"; Excludes: "config\*,\.studyo_ref_cache*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MyDistDir}\*"; DestDir: "{app}"; Excludes: "config\*,\.studyo_ref_cache*,cikti_sesler\*,referans_sesler_ozel\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; 2. Fabrika presetleri her güncellemede yenilenir
 Source: "{#MyDistDir}\config\factory_presets.json"; DestDir: "{app}\config"; Flags: ignoreversion
