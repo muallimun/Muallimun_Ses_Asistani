@@ -1,0 +1,52 @@
+﻿========================================================================
+   KURULUM BAŞARIYLA TAMAMLANDI — HIZLI BAŞLANGIÇ REHBERİ VE İPUÇLARI
+========================================================================
+
+Muallimun AI Ses Stüdyosu Pro bilgisayarınıza başarıyla kurulmuştur.
+En yüksek ses kalitesini elde etmek için aşağıdaki 4 kısa ipucuna göz atabilirsiniz:
+
+------------------------------------------------------------------------
+1. İLK ÇALIŞTIRMA VE MODEL DOĞRULAMA
+------------------------------------------------------------------------
+* Uygulamayı ilk kez açtığınızda üst bardaki "Modeller & Kurulum" butonuna
+  tıklayarak donanım durumunuzu ve 8 stüdyo referans sesini kontrol edebilirsiniz.
+* Ana motor olan Spark-TTS ilk sentez sırasında model dosyalarını bir defaya
+  mahsus indirip önbelleğe alır; sonraki tüm kullanımlarda internet bağlantısı
+  gerektirmeden tamamen çevrimdışı (offline) çalışır.
+
+------------------------------------------------------------------------
+2. EN YÜKSEK SES KALİTESİ İÇİN 3 ALTIN KURAL
+------------------------------------------------------------------------
+* Harekeli Metin Kullanımı:
+  Spark-TTS motoru tam harekeli Arapça metinlerle eğitilmiştir. Harekesiz bir
+  metin yapıştırdığınızda "✨ Otomatik Harekele" butonunu kullanabilir veya
+  uyarı penceresinden tek tıkla harekeleyebilirsiniz.
+
+* Doğru İçerik Modu ve Tonlama Seçimi:
+  1. Sekmenin sol üst köşesinden içeriğinize uygun modu (Tek Kelime, Cümle,
+  Atasözü, Diyalog, Uzun Metin) ve 8 farklı akustik tonlama profilinden
+  birini seçerek doğal vurgu elde edebilirsiniz.
+
+* Özel Referans Ses Ekleme:
+  2. Sekmeden kendi referans sesinizi eklerken 4-10 saniye uzunluğunda,
+  arka plan müziği ve yankısı olmayan net bir konuşma kaydı seçiniz. Ses
+  içinde okunan Arapça metinden emin değilseniz metin kutusunu BOŞ BIRAKINIZ;
+  motor otomatik olarak "Saf Akustik Klonlama" modunda çalışacaktır.
+
+------------------------------------------------------------------------
+3. PRATİK KLAVYE KISAYOLLARI
+------------------------------------------------------------------------
+* Ctrl + Enter   : Metni Hemen Seslendir (1. Sekme)
+* Esc            : Devam Eden Sentezi Güvenli Durdur
+* Ctrl + (+) / - : Arapça Metin Yazı Boyutunu Büyüt / Küçült (A+ / A-)
+* F1             : Kapsamlı Kullanım Kılavuzunu ve Başlangıç Turunu Aç
+
+------------------------------------------------------------------------
+4. ÇIKTI KLASÖRLERİ VE İLETİŞİM
+------------------------------------------------------------------------
+* Üretilen tüm seslere uygulama içindeki "📂 Çıktı Klasörünü Aç" butonuyla
+  anında ulaşabilirsiniz.
+* Web Portalı : https://muallimun.net
+* GitHub      : https://github.com/muallimun/Muallimun_Ses_Asistani
+
+"Bitti" (Finish) butonuna tıklayarak stüdyoyu hemen başlatabilirsiniz!

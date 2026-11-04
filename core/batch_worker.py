@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MUALLİMUN AI SES STÜDYOSU PRO - TOPLU SESLENDİRME, ŞABLON, İÇE AKTARMA VE CHECKPOINT V2 MOTORU
+MUALLİMUN AI SES STÜDYOSU PRO - TOPLU SESLENDİRME, 8 TONLAMA PROFİLİ, ZENGİN ŞABLON VE CHECKPOINT V2 MOTORU
 Özellikler:
-  1. Path Traversal Korumalı Güvenli Çıktı Yolu Çözümleyici (safe_output_path)
-  2. İçerik-Adresli SQLite Checkpoint v2 (WAL Modu + Satır Parmak İzi + Fiziksel Dosya Doğrulaması)
-  3. CancelToken ve Motor Kilidi Uyumlu, try/except/finally Garantili StudyoBatchWorker
-  4. Deterministik Konuşmacı Rol/Ses Eşlemesi (tr_kucult + rol_tahmin_et) ve Tam Diyalog Birleştirme
-  5. Tırnaklı CSV (; / ,), JSON Şema Doğrulamalı Veri İçe Aktarıcı ve Açılır Listeli Excel Şablon Üretici
+  1. 8 Akustik Tonlama Profili (Sözlük/Tek Kelime, Muallim, Babacan, Diyalog, Soru, Hitabet, Öyküleyici, Otomatik)
+  2. Zenginleştirilmiş Şablonlar (4 Ayrı Çoklu Diyalog, 4 Ayrı Uzun Okuma Parçası, Cümle, Atasözü, Sözlük)
+  3. Kaynak Dosyadaki Özel Ses İsimlendirme Desteği (ses_dosyasi, dosya_adi, ses_erkek, ses_kadin, audio)
+  4. Path Traversal Korumalı Güvenli Çıktı Yolu Çözümleyici ve İçerik-Adresli SQLite Checkpoint v2
 """
 
 import os
@@ -17,8 +16,9 @@ import time
 import json
 import sqlite3
 import hashlib
+from contextlib import closing
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Set
 
 from PySide6.QtCore import QThread, Signal
 
@@ -43,25 +43,43 @@ WINDOWS_AYRILMIS_ADLAR = {
 
 
 def guvenli_kimlik_temizle(ham_deger: str, varsayilan: str = "kayit") -> str:
-    """
-    Dışarıdan gelen ID ve grup adlarını güvenli dosya/klasör adına dönüştürür.
-    '..', '/', '\\', ':' ve kontrol karakterlerini tamamen temizler.
-    """
     temiz = str(ham_deger or "").strip()
     temiz = re.sub(r"[\\/:*?\"<>|\r\n\t]+", "_", temiz)
     temiz = temiz.replace("..", "_").strip(" ._")
     if not temiz:
         temiz = varsayilan
-    if temiz.upper() in WINDOWS_AYRILMIS_ADLAR:
+    kok_ad = temiz.split(".")[0].upper()
+    if kok_ad in WINDOWS_AYRILMIS_ADLAR:
         temiz = f"_{temiz}"
-    return temiz[:80]
+    return temiz[:90]
+
+
+def guvenli_goreli_dosya_yolu_temizle(ham_yol: str, varsayilan_uzanti: str = ".mp3") -> str:
+    ham = str(ham_yol or "").strip().replace("\\", "/")
+    if not ham:
+        return ""
+    ham = re.sub(r"^[a-zA-Z]:", "", ham).lstrip("/")
+
+    parcalar = []
+    for p in ham.split("/"):
+        p_temiz = p.strip()
+        if not p_temiz or p_temiz in (".", ".."):
+            continue
+        parcalar.append(guvenli_kimlik_temizle(p_temiz, varsayilan="ses"))
+
+    if not parcalar:
+        return ""
+
+    son_parca = parcalar[-1]
+    uzanti_kucuk = Path(son_parca).suffix.lower()
+    if uzanti_kucuk not in (".wav", ".mp3"):
+        uz = varsayilan_uzanti if varsayilan_uzanti.startswith(".") else f".{varsayilan_uzanti}"
+        parcalar[-1] = f"{son_parca}{uz}"
+
+    return "/".join(parcalar)
 
 
 def guvenli_hedef_yol_cozumle(cikti_kok: Path, goreli_hedef: str | Path) -> Path:
-    """
-    Hedef dosya yolunun her koşulda 'cikti_kok' dizini altında kaldığını doğrular.
-    Kök dizin dışına çıkmaya çalışan ('../../' veya mutlak) yolları reddeder.
-    """
     kok = cikti_kok.resolve()
     ham_str = str(goreli_hedef or "").strip().replace("\\", "/")
     ham_str = re.sub(r"^[a-zA-Z]:", "", ham_str).lstrip("/")
@@ -85,7 +103,7 @@ def guvenli_hedef_yol_cozumle(cikti_kok: Path, goreli_hedef: str | Path) -> Path
 
 
 # ==============================================================================
-# 2. DUYGU / TONLAMA PROFİLLERİ VE SES SEÇİMİ KOD ÇÖZÜMLEYİCİ
+# 2. 8 STÜDYO DUYGU / TONLAMA PROFİLİ (GERÇEK AKUSTİK, SAMPLING VE DSP ETKİLİ)
 # ==============================================================================
 DUYGU_TONU_PROFILLERI: Dict[str, Dict[str, Any]] = {
     "otomatik": {
@@ -93,35 +111,96 @@ DUYGU_TONU_PROFILLERI: Dict[str, Dict[str, Any]] = {
         "ad": "✨ Otomatik (Noktalama ve Metne Göre Doğal Tonlama)",
         "hiz_carpani": 1.00,
         "temp_farki": 0.00,
-        "aciklama": "Soru (؟), ünlem (!) ve cümle uzunluğuna göre hızı ve vurguyu otomatik dengeler.",
+        "top_p": 0.92,
+        "top_k": 45,
+        "drive_farki": 0.00,
+        "son_pay_ek_ms": 0.0,
+        "hikmetli_durak_zorla": False,
+        "aciklama": "Soru (؟), ünlem (!), tek kelime ve cümle uzunluğuna göre hızı, sıcaklığı ve vurguyu otomatik ayarlar.",
+    },
+    "tek_kelime_sozluk": {
+        "kod": "tek_kelime_sozluk",
+        "ad": "🔤 Sözlük & Tek Kelime (Harf ve Mahreç Odaklı Net Okuma)",
+        "hiz_carpani": 0.91,
+        "temp_farki": -0.08,
+        "top_p": 0.85,
+        "top_k": 30,
+        "drive_farki": +0.03,
+        "son_pay_ek_ms": +25.0,
+        "hikmetli_durak_zorla": False,
+        "aciklama": "Sözlük maddeleri, tekil kelimeler ve kavramlar için sıfır sapmalı, mahreçleri keskin ve vakıf sonu belirgin okuma.",
     },
     "muallim_net": {
         "kod": "muallim_net",
         "ad": "🎓 Akademik Muallim (Tane Tane & Net Ders Tonu)",
-        "hiz_carpani": 0.95,
+        "hiz_carpani": 0.94,
         "temp_farki": -0.05,
-        "aciklama": "Gramer ve yeni kelime öğretimi için mahreçleri belirgin, sakin öğretmen tonu.",
+        "top_p": 0.88,
+        "top_k": 38,
+        "drive_farki": +0.02,
+        "son_pay_ek_ms": +20.0,
+        "hikmetli_durak_zorla": False,
+        "aciklama": "Gramer örnekleri ve ders kitabı cümleleri için tane tane, sakin ve anlaşılır öğretmen tonu.",
     },
     "babacan_hikmetli": {
         "kod": "babacan_hikmetli",
-        "ad": "🌿 Babacan & Hikmetli Nasihat Tonu",
-        "hiz_carpani": 0.91,
-        "temp_farki": -0.03,
-        "aciklama": "Atasözleri, vecizeler ve hikmetli sözler için ağırbaşlı, tefekkür vurgulu okuma.",
+        "ad": "🌿 Babacan & Hikmetli Nasihat Tonu (Tefekkür Duraklı)",
+        "hiz_carpani": 0.89,
+        "temp_farki": -0.04,
+        "top_p": 0.89,
+        "top_k": 40,
+        "drive_farki": +0.05,
+        "son_pay_ek_ms": +45.0,
+        "hikmetli_durak_zorla": True,
+        "aciklama": "Atasözleri, vecizeler ve hikmetli sözler için ağırbaşlı, sıcak tınılı ve tefekkür duraklı okuma.",
     },
     "canli_diyalog": {
         "kod": "canli_diyalog",
         "ad": "🎭 Canlı & Enerjik Diyalog Vurgusu",
         "hiz_carpani": 1.03,
         "temp_farki": +0.05,
-        "aciklama": "Günlük konuşma ve diyalog replikleri için akıcı, doğal tonlama.",
+        "top_p": 0.95,
+        "top_k": 55,
+        "drive_farki": 0.00,
+        "son_pay_ek_ms": -10.0,
+        "hikmetli_durak_zorla": False,
+        "aciklama": "Karşılıklı konuşma ve diyalog replikleri için doğal, akıcı ve canlı konuşma tonu.",
+    },
+    "soru_merak": {
+        "kod": "soru_merak",
+        "ad": "❓ Soru & Merak Vurgusu (Yükselen Tonlama)",
+        "hiz_carpani": 1.02,
+        "temp_farki": +0.06,
+        "top_p": 0.95,
+        "top_k": 55,
+        "drive_farki": +0.01,
+        "son_pay_ek_ms": +15.0,
+        "hikmetli_durak_zorla": False,
+        "aciklama": "Soru edatları (هَلْ، مَاذَا، كَيْفَ، أَيْنَ) içeren cümlelerde soru vurgusunu belirginleştirir.",
+    },
+    "coskulu_hitabet": {
+        "kod": "coskulu_hitabet",
+        "ad": "❗ Coşkulu & Vurgulu Hitabet Tonu",
+        "hiz_carpani": 0.98,
+        "temp_farki": +0.07,
+        "top_p": 0.96,
+        "top_k": 60,
+        "drive_farki": +0.06,
+        "son_pay_ek_ms": +30.0,
+        "hikmetli_durak_zorla": True,
+        "aciklama": "Ünlem, nida (يَا أَيُّهَا) ve hitabet cümleleri için dolgun ve güçlü vurgu.",
     },
     "oykuleyici_dingin": {
         "kod": "oykuleyici_dingin",
         "ad": "📖 Dingin Öyküleyici (Uzun Metin & Hikaye Anlatımı)",
-        "hiz_carpani": 0.94,
+        "hiz_carpani": 0.93,
         "temp_farki": -0.02,
-        "aciklama": "Okuma parçaları ve paragraflar için yormayan, dengeli anlatıcı temposu.",
+        "top_p": 0.90,
+        "top_k": 42,
+        "drive_farki": +0.01,
+        "son_pay_ek_ms": +35.0,
+        "hikmetli_durak_zorla": True,
+        "aciklama": "Okuma parçaları ve uzun paragraflar için dinleyiciyi yormayan, dengeli anlatıcı temposu.",
     },
 }
 
@@ -168,50 +247,251 @@ def ses_secimi_kodunu_cozumle(secim_kodu: str) -> str:
     return ham
 
 
-def duygu_ve_tonlama_hesapla(
+def duygu_ve_tonlama_detayli_hesapla(
     arapca_metin: str,
     preset: Dict[str, Any],
     secilen_duygu_kodu: str = "otomatik",
-) -> Tuple[float, float, str, str]:
+) -> Dict[str, Any]:
+    """
+    Seçilen tonlama profiline ve metnin yapısına göre yalnızca hız/sıcaklığı değil;
+    top_p, top_k, DSP drive, son nefes payı ve hikmetli durak parametrelerini de hesaplar.
+    """
     baz_hiz = float(preset.get("hiz", 0.92))
     baz_temp = float(preset.get("temperature", 0.64))
     dinamik_mi = bool(preset.get("dinamik_tonlama", True))
     metin = str(arapca_metin or "").strip()
+    kelime_sayisi = len(metin.split())
 
     profil = DUYGU_TONU_PROFILLERI.get(secilen_duygu_kodu, DUYGU_TONU_PROFILLERI["otomatik"])
     hiz = baz_hiz * float(profil.get("hiz_carpani", 1.0))
     temp = baz_temp + float(profil.get("temp_farki", 0.0))
+    top_p = float(profil.get("top_p", preset.get("top_p", 0.92)))
+    top_k = int(profil.get("top_k", preset.get("top_k", 45)))
     algilanan_kip = profil["ad"]
+    hikmetli_durak = bool(preset.get("hikmetli_durak_ekle", False)) or bool(profil.get("hikmetli_durak_zorla", False))
+
+    dsp_kopya = dict(preset.get("dsp", {}))
+    dsp_kopya["drive"] = round(
+        max(1.0, min(1.22, float(dsp_kopya.get("drive", 1.06)) + float(profil.get("drive_farki", 0.0)))), 2
+    )
+    dsp_kopya["son_pay_ms"] = round(
+        max(80.0, min(360.0, float(dsp_kopya.get("son_pay_ms", 240.0)) + float(profil.get("son_pay_ek_ms", 0.0)))), 1
+    )
 
     if secilen_duygu_kodu == "otomatik" and dinamik_mi:
-        if "؟" in metin or "?" in metin:
-            hiz = min(1.08, baz_hiz * 1.03)
-            temp = min(0.76, baz_temp + 0.04)
-            algilanan_kip = "❓ Soru Tonlaması (Canlı Vurgu)"
-        elif "!" in metin:
+        if kelime_sayisi == 1:
+            hiz = max(0.86, baz_hiz * 0.92)
+            temp = max(0.50, baz_temp - 0.06)
+            top_p, top_k = 0.86, 32
+            algilanan_kip = "🔤 Tek Kelime / Sözlük Tonu"
+        elif "؟" in metin or "?" in metin:
             hiz = min(1.06, baz_hiz * 1.02)
-            temp = min(0.76, baz_temp + 0.05)
-            algilanan_kip = "❗ Ünlem / Coşku Vurgusu"
-        elif len(metin.split()) >= 14:
-            hiz = max(0.84, baz_hiz * 0.97)
+            temp = min(0.74, baz_temp + 0.05)
+            top_p, top_k = 0.95, 55
+            algilanan_kip = "❓ Soru & Merak Tonlaması"
+        elif "!" in metin:
+            hiz = min(1.05, baz_hiz * 1.01)
+            temp = min(0.75, baz_temp + 0.06)
+            top_p, top_k = 0.95, 55
+            algilanan_kip = "❗ Ünlem / Vurgulu Tonlama"
+        elif kelime_sayisi >= 12:
+            hiz = max(0.86, baz_hiz * 0.96)
+            temp = max(0.54, baz_temp - 0.02)
+            hikmetli_durak = True
             algilanan_kip = "📖 Uzun Cümle (Dengeli Soluk)"
         else:
             algilanan_kip = "✨ Doğal Muallim Tonu"
 
     hiz = round(max(0.75, min(1.25, hiz)), 2)
-    temp = round(max(0.35, min(0.80, temp)), 2)
-    return hiz, temp, algilanan_kip, profil.get("aciklama", "")
+    temp = round(max(0.45, min(0.78, temp)), 2)
+    return {
+        "hiz": hiz,
+        "temp": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "dsp": dsp_kopya,
+        "hikmetli_durak": hikmetli_durak,
+        "algilanan_kip": algilanan_kip,
+        "aciklama": profil.get("aciklama", ""),
+    }
+
+
+def duygu_ve_tonlama_hesapla(
+    arapca_metin: str,
+    preset: Dict[str, Any],
+    secilen_duygu_kodu: str = "otomatik",
+) -> Tuple[float, float, str, str]:
+    detay = duygu_ve_tonlama_detayli_hesapla(arapca_metin, preset, secilen_duygu_kodu)
+    return detay["hiz"], detay["temp"], detay["algilanan_kip"], detay["aciklama"]
 
 
 # ==============================================================================
-# 3. ÖRNEK ŞABLON OLUŞTURUCU (EXCEL .XLSX, JSON, CSV, TXT)
+# 3. ZENGİNLEŞTİRİLMİŞ ÖRNEK ŞABLONLAR (4 DİYALOG + 4 UZUN METİN + SÖZLÜK & CÜMLE)
 # ==============================================================================
+ORNEK_COKLU_DIYALOGLAR_JSON: List[Dict[str, Any]] = [
+    {
+        "id": "dlg_001",
+        "seviye": "A1",
+        "baslik_tr": "1. Diyalog: Tanışma ve Selamlaşma",
+        "satirlar": [
+            {
+                "sira": 1,
+                "konusmaci": "Ömer",
+                "cinsiyet": "E",
+                "arapca": "اَلسَّلَامُ عَلَيْكُمْ، أَنَا عُمَرُ. مَا اسْمُكِ؟",
+                "turkce": "Selamün aleyküm, ben Ömer. Senin adın ne?",
+            },
+            {
+                "sira": 2,
+                "konusmaci": "Leyla",
+                "cinsiyet": "K",
+                "arapca": "وَعَلَيْكُمُ السَّلَامُ، اِسْمِي لَيْلَى. كَيْفَ حَالُكَ؟",
+                "turkce": "Aleykümselam, benim adım Leyla. Nasılsın?",
+            },
+            {
+                "sira": 3,
+                "konusmaci": "Ömer",
+                "cinsiyet": "E",
+                "arapca": "أَنَا بِخَيْرٍ وَالْحَمْدُ لِلَّهِ، تَشَرَّفْتُ بِمَعْرِفَتِكِ يَا لَيْلَى!",
+                "turkce": "İyiyim elhamdülillah, tanıştığımıza memnun oldum Leyla!",
+            },
+        ],
+    },
+    {
+        "id": "dlg_002",
+        "seviye": "A2",
+        "baslik_tr": "2. Diyalog: Sınıfta ve Kütüphanede",
+        "satirlar": [
+            {
+                "sira": 1,
+                "konusmaci": "Öğretmen",
+                "cinsiyet": "E",
+                "arapca": "صَبَاحُ الْخَيْرِ يَا طُلَّابِي، أَيْنَ كِتَابُكَ يَا عَلِيُّ؟",
+                "turkce": "Günaydın öğrencilerim, kitabın nerede Ali?",
+            },
+            {
+                "sira": 2,
+                "konusmaci": "Öğrenci Ali",
+                "cinsiyet": "E",
+                "arapca": "كِتَابِي عَلَى الْمَكْتَبِ يَا أُسْتَاذِي.",
+                "turkce": "Kitabım sıranın üzerinde öğretmenim.",
+            },
+            {
+                "sira": 3,
+                "konusmaci": "Öğretmen",
+                "cinsiyet": "E",
+                "arapca": "أَحْسَنْتَ يَا عَلِيُّ، اِفْتَحِ الصَّفْحَةَ الْعَاشِرَةَ وَاقْرَأِ الدَّرْسَ.",
+                "turkce": "Aferin Ali, onuncu sayfayı aç ve dersi oku.",
+            },
+        ],
+    },
+    {
+        "id": "dlg_003",
+        "seviye": "B1",
+        "baslik_tr": "3. Diyalog: Kitapçıda ve Çarşıda",
+        "satirlar": [
+            {
+                "sira": 1,
+                "konusmaci": "Müşteri Fatma",
+                "cinsiyet": "K",
+                "arapca": "مَسَاءُ الْخَيْرِ، أُرِيدُ مُعْجَمًا عَرَبِيًّا جَدِيدًا مِنْ فَضْلِكَ.",
+                "turkce": "İyi akşamlar, yeni bir Arapça sözlük istiyorum lütfen.",
+            },
+            {
+                "sira": 2,
+                "konusmaci": "Satıcı",
+                "cinsiyet": "E",
+                "arapca": "مَسَاءُ النُّورِ، تَفَضَّلِي هَذَا الْمُعْجَمُ شَامِلٌ وَمُفِيدٌ جِدًّا لِلطُّلَّابِ.",
+                "turkce": "İyi akşamlar, buyurun bu sözlük öğrenciler için kapsamlı ve çok faydalıdır.",
+            },
+            {
+                "sira": 3,
+                "konusmaci": "Müşteri Fatma",
+                "cinsiyet": "K",
+                "arapca": "شُكْرًا جَزِيلًا، سَأَشْتَرِي هَذَا الْمُعْجَمَ وَكِتَابَ الْقَوَاعِدِ أَيْضًا.",
+                "turkce": "Çok teşekkür ederim, bu sözlüğü ve gramer kitabını da satın alacağım.",
+            },
+        ],
+    },
+    {
+        "id": "dlg_004",
+        "seviye": "B1",
+        "baslik_tr": "4. Diyalog: Aile Bireyleri ve Meslekler",
+        "satirlar": [
+            {
+                "sira": 1,
+                "konusmaci": "Anne",
+                "cinsiyet": "K",
+                "arapca": "مَاذَا تُرِيدِينَ أَنْ تَكُونِي فِي الْمُسْتَقْبَلِ يَا ابْنَتِي زَيْنَبُ؟",
+                "turkce": "Gelecekte ne olmak istiyorsun kızım Zeynep?",
+            },
+            {
+                "sira": 2,
+                "konusmaci": "Kızım Zeynep",
+                "cinsiyet": "K",
+                "arapca": "أُرِيدُ أَنْ أَكُونَ مُعَلِّمَةً نَاجِحَةً مِثْلَكِ يَا أُمِّي الْعَزِيزَةُ.",
+                "turkce": "Senin gibi başarılı bir öğretmen olmak istiyorum sevgili annem.",
+            },
+            {
+                "sira": 3,
+                "konusmaci": "Baba",
+                "cinsiyet": "E",
+                "arapca": "بَارَكَ اللَّهُ فِيكِ يَا ابْنَتِي، اَلتَّعْلِيمُ مِهْنَةٌ شَرِيفَةٌ وَعَظِيمَةٌ.",
+                "turkce": "Allah seni mübarek kılsın kızım, öğretmenlik şerefli ve yüce bir meslektir.",
+            },
+        ],
+    },
+]
+
+ORNEK_COKLU_METINLER_JSON: List[Dict[str, Any]] = [
+    {
+        "id": "metin_001",
+        "baslik_tr": "1. Okuma Metni: İlim ve Hikmet",
+        "satirlar": [
+            {"sira": 1, "arapca": "اَلْعِلْمُ نُورٌ يُضِيءُ طَرِيقَ الْإِنْسَانِ فِي الْحَيَاةِ."},
+            {"sira": 2, "arapca": "وَالْقِرَاءَةُ الْمُسْتَمِرَّةُ تَفْتَحُ لَنَا أَبْوَابَ الْمَعْرِفَةِ وَالْحِكْمَةِ كُلَّ يَوْمٍ."},
+            {"sira": 3, "arapca": "فَمَنْ جَدَّ وَجَدَ، وَمَنْ زَرَعَ حَصَدَ، وَمَنْ سَارَ عَلَى الدَّرْبِ وَصَلَ."},
+        ],
+    },
+    {
+        "id": "metin_002",
+        "baslik_tr": "2. Okuma Metni: Fasih Arapça ve Önemi",
+        "satirlar": [
+            {"sira": 1, "arapca": "بِدَايَةً لَا بُدَّ أَنْ تَعْلَمَ أَنَّ الْعَرَبَ عِنْدَهُمْ لُغَةٌ رَسْمِيَّةٌ وَهِيَ الْفَصِيحَةُ."},
+            {"sira": 2, "arapca": "وَتُسْتَخْدَمُ هَذِهِ اللُّغَةُ الْفَصِيحَةُ فِي الْأَوْرَاقِ الرَّسْمِيَّةِ وَالْكُتُبِ الْعِلْمِيَّةِ وَالْإِعْلَامِ."},
+            {"sira": 3, "arapca": "وَمَنْ يَتَعَلَّمِ الْعَرَبِيَّةَ الْفُصْحَى يَسْتَطِيعُ أَنْ يَفْهَمَ الْقُرْآنَ الْكَرِيمَ وَالتُّرَاثَ الْإِسْلَامِيَّ."},
+        ],
+    },
+    {
+        "id": "metin_003",
+        "baslik_tr": "3. Okuma Metni: İslam Medeniyetinde Kütüphaneler",
+        "satirlar": [
+            {"sira": 1, "arapca": "كَانَتِ الْمَكْتَبَاتُ فِي الْحَضَارَةِ الْإِسْلَامِيَّةِ مَرَاكِزَ عَظِيمَةً لِلْعِلْمِ وَالْبَحْثِ."},
+            {"sira": 2, "arapca": "وَكَانَ الْعُلَمَاءُ وَالطُّلَّابُ يَجْتَمِعُونَ فِيهَا لِقِرَاءَةِ الْمَخْطُوطَاتِ وَمُنَاقَشَةِ الْمَسَائِلِ الْعِلْمِيَّةِ."},
+            {"sira": 3, "arapca": "وَلِذَلِكَ انْتَشَرَتِ الْعُلُومُ وَالْمَعَارِفُ فِي جَمِيعِ أَنْحَاءِ الْعَالَمِ."},
+        ],
+    },
+    {
+        "id": "metin_004",
+        "baslik_tr": "4. Okuma Metni: Günlük Hayat ve Zamanın Değeri",
+        "satirlar": [
+            {"sira": 1, "arapca": "اَلْوَقْتُ ثَمِينٌ جِدًّا فِي حَيَاةِ الْإِنْسَانِ الْمُؤْمِنِ وَالطَّالِبِ الْمُجْتَهِدِ."},
+            {"sira": 2, "arapca": "يَسْتَيْقِظُ الطَّالِبُ النَّشِيطُ فِي الصَّبَاحِ الْبَاكِرِ وَيُرَتِّبُ أَعْمَالَهُ الْيَوْمِيَّةَ بِنِظَامٍ."},
+            {"sira": 3, "arapca": "فَالنَّجَاحُ الْحَقِيقِيُّ يَحْتَاجُ إِلَى الصَّبْرِ وَالْعَمَلِ الْمُتَوَاصِلِ دُونَ كَسَلٍ."},
+        ],
+    },
+]
+
+
 class OrnekSablonOlusturucu:
     ORNEK_VERILER: Dict[str, List[Dict[str, Any]]] = {
         "tek_kelime": [
-            {"id": "kelime_0001", "arapca": "كِتَابٌ", "turkce": "Kitap", "kelime_turu": "isim", "ses_secimi": "IKISI"},
-            {"id": "kelime_0002", "arapca": "مَدْرَسَةٌ", "turkce": "Okul", "kelime_turu": "isim", "ses_secimi": "IKISI"},
-            {"id": "kelime_0003", "arapca": "يَكْتُبُ", "turkce": "Yazıyor", "kelime_turu": "fiil", "ses_secimi": "E1"},
+            {"id": "kelime_0001", "arapca": "كِتَابٌ", "turkce": "Kitap", "kelime_turu": "isim", "ses_secimi": "IKISI", "ses_dosyasi": ""},
+            {"id": "kelime_0002", "arapca": "مَدْرَسَةٌ", "turkce": "Okul", "kelime_turu": "isim", "ses_secimi": "IKISI", "ses_dosyasi": ""},
+            {"id": "kelime_0003", "arapca": "مُعَلِّمٌ", "turkce": "Öğretmen", "kelime_turu": "isim", "ses_secimi": "E1", "ses_dosyasi": ""},
+            {"id": "kelime_0004", "arapca": "مَكْتَبَةٌ", "turkce": "Kütüphane", "kelime_turu": "isim", "ses_secimi": "K1", "ses_dosyasi": ""},
+            {"id": "kelime_0005", "arapca": "يَكْتُبُ", "turkce": "Yazıyor", "kelime_turu": "fiil", "ses_secimi": "E1", "ses_dosyasi": ""},
+            {"id": "kelime_0006", "arapca": "يَقْرَأُ", "turkce": "Okuyor", "kelime_turu": "fiil", "ses_secimi": "K1", "ses_dosyasi": ""},
         ],
         "cumle": [
             {
@@ -219,18 +499,35 @@ class OrnekSablonOlusturucu:
                 "arapca": "اَلْعِلْمُ نَافِعٌ وَالْجَهْلُ ضَارٌّ.",
                 "turkce": "İlim faydalıdır, cehalet zararlıdır.",
                 "ses_secimi": "IKISI",
+                "ses_dosyasi": "",
             },
             {
                 "id": "cumle_0002",
                 "arapca": "أُمِّي مُعَلِّمَةٌ نَشِيطَةٌ تُحِبُّ عَمَلَهَا كَثِيرًا.",
                 "turkce": "Annem işini çok seven çalışkan bir öğretmendir.",
                 "ses_secimi": "K1",
+                "ses_dosyasi": "",
             },
             {
                 "id": "cumle_0003",
+                "arapca": "بِدَايَةً لَا بُدَّ أَنْ تَعْلَمَ أَنَّ الْعَرَبَ عِنْدَهُمْ لُغَةٌ رَسْمِيَّةٌ وَهِيَ الْفَصِيحَةُ، وَتُسْتَخْدَمُ فِي الْأَوْرَاقِ الرَّسْمِيَّةِ.",
+                "turkce": "Başlangıç olarak bilmelisin ki Arapların resmi bir dili vardır, o da Fasih Arapçadır ve resmi belgelerde kullanılır.",
+                "ses_secimi": "E1",
+                "ses_dosyasi": "",
+            },
+            {
+                "id": "cumle_0004",
                 "arapca": "هَلْ قَرَأْتَ هَذَا الْكِتَابَ الْجَدِيدَ يَا أَحْمَدُ؟",
                 "turkce": "Bu yeni kitabı okudun mu Ahmet?",
-                "ses_secimi": "E1",
+                "ses_secimi": "E2",
+                "ses_dosyasi": "",
+            },
+            {
+                "id": "cumle_0005",
+                "arapca": "ذَهَبَ الطُّلَّابُ فِي الصَّبَاحِ الْبَاكِرِ إِلَى الْمَكْتَبَةِ الْكَبِيرَةِ.",
+                "turkce": "Öğrenciler sabah erkenden büyük kütüphaneye gittiler.",
+                "ses_secimi": "IKISI",
+                "ses_dosyasi": "",
             },
         ],
         "atasozu": [
@@ -239,53 +536,57 @@ class OrnekSablonOlusturucu:
                 "arapca": "مَنْ جَدَّ وَجَدَ، وَمَنْ زَرَعَ حَصَدَ.",
                 "turkce": "Çalışan kazanır, eken biçer.",
                 "ses_secimi": "IKISI",
+                "ses_dosyasi": "",
             },
             {
                 "id": "ata_0002",
                 "arapca": "اَلْعِلْمُ فِي الصِّغَرِ كَالنَّقْشِ عَلَى الْحَجَرِ.",
                 "turkce": "Küçükken öğrenilen ilim taşa kazınan yazı gibidir.",
                 "ses_secimi": "E1",
+                "ses_dosyasi": "",
+            },
+            {
+                "id": "ata_0003",
+                "arapca": "إِذَا كَانَ الْكَلَامُ مِنْ فِضَّةٍ فَالسُّكُوتُ مِنْ ذَهَبٍ.",
+                "turkce": "Söz gümüşse sükût altındır.",
+                "ses_secimi": "K1",
+                "ses_dosyasi": "",
+            },
+            {
+                "id": "ata_0004",
+                "arapca": "اَلْوَقْتُ كَالسَّيْفِ إِنْ لَمْ تَقْطَعْهُ قَطَعَكَ.",
+                "turkce": "Vakit kılıç gibidir, sen onu kesmezsen o seni keser.",
+                "ses_secimi": "E2",
+                "ses_dosyasi": "",
             },
         ],
         "diyalog": [
             {
-                "id": "dlg_001_satir_01",
-                "grup_id": "dlg_001",
-                "sira": 1,
-                "konusmaci": "Öğretmen",
-                "cinsiyet": "E",
-                "arapca": "اَلسَّلَامُ عَلَيْكُمْ يَا طُلَّابِي، كَيْفَ حَالُكُمْ؟",
-                "turkce": "Selamün aleyküm öğrencilerim, nasılsınız?",
-                "ses_secimi": "E1",
-            },
-            {
-                "id": "dlg_001_satir_02",
-                "grup_id": "dlg_001",
-                "sira": 2,
-                "konusmaci": "Ali",
-                "cinsiyet": "E",
-                "arapca": "وَعَلَيْكُمُ السَّلَامُ يَا أُسْتَاذِي، نَحْنُ بِخَيْرٍ وَالْحَمْدُ لِلَّهِ.",
-                "turkce": "Aleykümselam öğretmenim, iyiyiz elhamdülillah.",
-                "ses_secimi": "EC1",
-            },
+                "id": f"{g['id']}_satir_{s['sira']:02d}",
+                "grup_id": g["id"],
+                "sira": s["sira"],
+                "konusmaci": s["konusmaci"],
+                "cinsiyet": s["cinsiyet"],
+                "arapca": s["arapca"],
+                "turkce": s["turkce"],
+                "ses_secimi": "otomatik",
+                "ses_dosyasi": "",
+            }
+            for g in ORNEK_COKLU_DIYALOGLAR_JSON
+            for s in g["satirlar"]
         ],
         "uzun_metin": [
             {
-                "id": "metin_001_satir_01",
-                "grup_id": "metin_001",
-                "sira": 1,
-                "arapca": "اَلْعِلْمُ نُورٌ يُضِيءُ طَرِيقَ الْإِنْسَانِ فِي الْحَيَاةِ.",
-                "turkce": "İlim, insanın hayattaki yolunu aydınlatan bir ışıktır.",
+                "id": f"{m['id']}_satir_{s['sira']:02d}",
+                "grup_id": m["id"],
+                "sira": s["sira"],
+                "arapca": s["arapca"],
+                "turkce": m["baslik_tr"],
                 "ses_secimi": "E1",
-            },
-            {
-                "id": "metin_001_satir_02",
-                "grup_id": "metin_001",
-                "sira": 2,
-                "arapca": "وَالْقِرَاءَةُ الْمُسْتَمِرَّةُ تَفْتَحُ لَنَا أَبْوَابَ الْمَعْرِفَةِ وَالْحِكْمَةِ كُلَّ يَوْمٍ.",
-                "turkce": "Sürekli okumak ise bize her gün bilgi ve hikmet kapılarını açar.",
-                "ses_secimi": "E1",
-            },
+                "ses_dosyasi": "",
+            }
+            for m in ORNEK_COKLU_METINLER_JSON
+            for s in m["satirlar"]
         ],
     }
 
@@ -297,8 +598,14 @@ class OrnekSablonOlusturucu:
         uzanti = hedef.suffix.lower()
 
         if uzanti == ".json":
+            if mod_kodu == "diyalog":
+                json_veri = ORNEK_COKLU_DIYALOGLAR_JSON
+            elif mod_kodu == "uzun_metin":
+                json_veri = ORNEK_COKLU_METINLER_JSON
+            else:
+                json_veri = ornekler
             with open(hedef, "w", encoding="utf-8") as f:
-                json.dump(ornekler, f, ensure_ascii=False, indent=2)
+                json.dump(json_veri, f, ensure_ascii=False, indent=2)
             return str(hedef)
 
         if uzanti == ".txt":
@@ -316,7 +623,6 @@ class OrnekSablonOlusturucu:
                     writer.writerow(k)
             return str(hedef)
 
-        # Varsayılan: Renkli ve Açılır Listeli Excel (.xlsx)
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment
         from openpyxl.worksheet.datavalidation import DataValidation
@@ -372,7 +678,7 @@ class OrnekSablonOlusturucu:
 
 
 # ==============================================================================
-# 4. VERİ İÇE AKTARICI (JSON, CSV, EXCEL .XLSX, TXT — ŞEMA VE TÜR DOĞRULAMALI)
+# 4. VERİ İÇE AKTARICI (JSON, CSV, EXCEL .XLSX, TXT — ÖZEL SES DOSYASI ADI DESTEKLİ)
 # ==============================================================================
 class VeriIceAktarici:
     @classmethod
@@ -436,7 +742,6 @@ class VeriIceAktarici:
         if not sozluk_listesi:
             raise ValueError("JSON dosyasında seslendirilecek nesne (sözlük) kaydı bulunamadı.")
 
-        # İç içe 'satirlar' içeren Diyalog / Uzun Metin JSON formatı kontrolü
         if "satirlar" in sozluk_listesi[0] and isinstance(sozluk_listesi[0]["satirlar"], list):
             duz_liste: List[Dict[str, Any]] = []
             ilk_satir = sozluk_listesi[0]["satirlar"][0] if sozluk_listesi[0]["satirlar"] else {}
@@ -453,7 +758,7 @@ class VeriIceAktarici:
                         continue
                     cins = str(satir.get("cinsiyet", "E")).strip().upper()
                     duz_liste.append({
-                        "id": f"{grup_id}_satir_{s_idx:02d}",
+                        "id": str(satir.get("id") or f"{grup_id}_satir_{s_idx:02d}"),
                         "grup_id": grup_id,
                         "sira": int(satir.get("sira", s_idx)),
                         "konusmaci": str(satir.get("konusmaci", "")).strip(),
@@ -462,6 +767,9 @@ class VeriIceAktarici:
                         "turkce": str(satir.get("turkce", baslik)).strip(),
                         "kelime_turu": "genel",
                         "referans_ses": str(satir.get("ses_secimi", satir.get("referans_ses", "otomatik"))),
+                        "ses_dosyasi": str(satir.get("ses_dosyasi") or satir.get("dosya_adi") or satir.get("audio") or ""),
+                        "ses_erkek": str(satir.get("ses_erkek") or satir.get("erkek_dosya") or ""),
+                        "ses_kadin": str(satir.get("ses_kadin") or satir.get("kadin_dosya") or ""),
                         "mod": mod_kodu,
                     })
             return cls._duz_sozluk_listesini_normallestir(duz_liste, mod_kodu), mod_kodu
@@ -476,22 +784,24 @@ class VeriIceAktarici:
             ayrac = ";" if ornek_metin.count(";") >= ornek_metin.count(",") else ","
 
             reader = csv.reader(f, delimiter=ayrac, quotechar='"')
-            tum_satirlar = [ [h.strip() for h in r] for r in reader if any(h.strip() for h in r) ]
+            tum_satirlar = [[h.strip() for h in r] for r in reader if any(h.strip() for h in r)]
 
         if not tum_satirlar:
             return [], varsayilan_mod
 
         ilk = [k.lower() for k in tum_satirlar[0]]
-        baslik_var = any(k in ilk for k in ("id", "arapca", "arabic", "metin", "kelime", "turkce", "anlam"))
+        baslik_var = any(
+            k in ilk
+            for k in ("id", "arapca", "arabic", "metin", "kelime", "turkce", "anlam", "ses_dosyasi", "dosya_adi")
+        )
 
         ham_kayitlar: List[Dict[str, Any]] = []
         if baslik_var:
             basliklar = ilk
-            for idx, r in enumerate(tum_satirlar[1:], start=1):
+            for r in tum_satirlar[1:]:
                 sozluk = {basliklar[i]: (r[i] if i < len(r) else "") for i in range(len(basliklar))}
                 ham_kayitlar.append(sozluk)
         else:
-            # Başlıksız CSV (Örn: atasozleri.csv -> sira;arapca;turkce)
             for idx, r in enumerate(tum_satirlar, start=1):
                 if len(r) >= 3 and re.search(r"[\u0600-\u06FF]", r[1]):
                     ham_kayitlar.append({"id": f"{varsayilan_mod}_{idx:04d}", "arapca": r[1], "turkce": r[2]})
@@ -530,8 +840,12 @@ class VeriIceAktarici:
     @classmethod
     def _txt_yukle(cls, yol: Path, varsayilan_mod: str) -> Tuple[List[Dict[str, Any]], str]:
         with open(yol, "r", encoding="utf-8-sig") as f:
-            satirlar = [s.strip() for s in f.splitlines() if s.strip()]
-        ham = [{"id": f"{varsayilan_mod}_{i:04d}", "arapca": s, "turkce": ""} for i, s in enumerate(satirlar, start=1)]
+            satirlar = [s.strip() for s in f.read().splitlines() if s.strip()]
+        varsayilan_grup = guvenli_kimlik_temizle(yol.stem) if varsayilan_mod in ("uzun_metin", "diyalog") else ""
+        ham = [
+            {"id": f"{varsayilan_mod}_{i:04d}", "grup_id": varsayilan_grup, "sira": i, "arapca": s, "turkce": ""}
+            for i, s in enumerate(satirlar, start=1)
+        ]
         return cls._duz_sozluk_listesini_normallestir(ham, varsayilan_mod), varsayilan_mod
 
     @classmethod
@@ -566,7 +880,35 @@ class VeriIceAktarici:
                 or ""
             ).strip()
 
-            ham_id = str(k.get("id") or k.get("kod") or f"{mod_kodu}_{idx:04d}").strip()
+            ozel_tek_dosya = str(
+                k.get("ses_dosyasi")
+                or k.get("dosya_adi")
+                or k.get("filename")
+                or k.get("file_name")
+                or k.get("audio")
+                or k.get("ses_yolu")
+                or k.get("hedef_dosya")
+                or ""
+            ).strip()
+
+            ozel_erkek_dosya = str(
+                k.get("ses_erkek")
+                or k.get("erkek_dosya")
+                or k.get("erkek_ses")
+                or k.get("audio_male")
+                or ""
+            ).strip()
+
+            ozel_kadin_dosya = str(
+                k.get("ses_kadin")
+                or k.get("kadin_dosya")
+                or k.get("kadin_ses")
+                or k.get("audio_female")
+                or ""
+            ).strip()
+
+            varsayilan_id_adayi = Path(ozel_tek_dosya).stem if ozel_tek_dosya else f"{mod_kodu}_{idx:04d}"
+            ham_id = str(k.get("id") or k.get("kod") or varsayilan_id_adayi).strip()
             temiz_id = guvenli_kimlik_temizle(ham_id, varsayilan=f"{mod_kodu}_{idx:04d}")
             if temiz_id in gorulen_idler:
                 gorulen_idler[temiz_id] += 1
@@ -574,7 +916,9 @@ class VeriIceAktarici:
             else:
                 gorulen_idler[temiz_id] = 1
 
-            kelime_turu = str(k.get("kelime_turu") or k.get("tur") or ("isim" if mod_kodu == "tek_kelime" else "genel")).strip().lower()
+            kelime_turu = str(
+                k.get("kelime_turu") or k.get("tur") or ("isim" if mod_kodu == "tek_kelime" else "genel")
+            ).strip().lower()
             ref_secim = ses_secimi_kodunu_cozumle(
                 str(k.get("referans_ses") or k.get("ses_secimi") or k.get("voice") or "otomatik")
             )
@@ -592,6 +936,9 @@ class VeriIceAktarici:
                 "turkce": turkce,
                 "kelime_turu": kelime_turu,
                 "referans_ses": ref_secim,
+                "ses_dosyasi": ozel_tek_dosya,
+                "ses_erkek": ozel_erkek_dosya,
+                "ses_kadin": ozel_kadin_dosya,
                 "mod": str(k.get("mod", mod_kodu)),
             })
 
@@ -614,7 +961,7 @@ class CheckpointYoneticisi:
         return conn
 
     def _tabloyu_hazirla(self) -> None:
-        with self._baglanti_ac() as conn:
+        with closing(self._baglanti_ac()) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tamamlanan_satirlar_v2 (
                     job_hash TEXT NOT NULL,
@@ -629,6 +976,19 @@ class CheckpointYoneticisi:
                 )
             """)
             conn.commit()
+
+    def eski_isleri_temizle(self, gun: int = 30) -> None:
+        """Veritabanının sınırsız büyümesini önlemek için 30 günden eski kayıtları temizler."""
+        try:
+            esik_zaman = time.time() - (max(1, int(gun)) * 86400)
+            with closing(self._baglanti_ac()) as conn:
+                conn.execute(
+                    "DELETE FROM tamamlanan_satirlar_v2 WHERE guncelleme_zamani IS NOT NULL AND guncelleme_zamani < ?",
+                    (esik_zaman,),
+                )
+                conn.commit()
+        except Exception as e:
+            print(f"⚠️ Eski checkpoint temizlik uyarısı: {e}")
 
     @staticmethod
     def is_ozeti_olustur(
@@ -651,14 +1011,25 @@ class CheckpointYoneticisi:
         motor_tipi: str,
         ref_bilgisi: str,
         uzanti: str,
+        ek_parametreler: Optional[Dict[str, Any]] = None,
     ) -> str:
-        veri = f"{arapca.strip()}|{akustik.strip()}|{motor_tipi}|{ref_bilgisi}|{uzanti.lower()}"
+        """
+        Satırın metin, motor, referans ses ve sentez/DSP parametrelerini kapsayan
+        deterministik parmak izini oluşturur.
+        """
+        ek_str = ""
+        if ek_parametreler:
+            try:
+                ek_str = "|" + json.dumps(ek_parametreler, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            except Exception:
+                ek_str = ""
+        veri = f"{arapca.strip()}|{akustik.strip()}|{motor_tipi}|{ref_bilgisi}|{uzanti.lower()}{ek_str}"
         return hashlib.sha256(veri.encode("utf-8")).hexdigest()[:16]
 
     def tamamlananlari_getir(self, job_hash: str) -> Dict[str, Dict[str, Any]]:
         sonuc: Dict[str, Dict[str, Any]] = {}
         try:
-            with self._baglanti_ac() as conn:
+            with closing(self._baglanti_ac()) as conn:
                 cur = conn.execute(
                     "SELECT item_id, parmak_izi, erkek_yol, kadin_yol FROM tamamlanan_satirlar_v2 "
                     "WHERE job_hash = ? AND durum = 'tamamlandi'",
@@ -685,7 +1056,7 @@ class CheckpointYoneticisi:
         hata_mesaji: str = "",
     ) -> None:
         try:
-            with self._baglanti_ac() as conn:
+            with closing(self._baglanti_ac()) as conn:
                 conn.execute(
                     """
                     INSERT INTO tamamlanan_satirlar_v2
@@ -707,7 +1078,7 @@ class CheckpointYoneticisi:
 
     def is_gecmisini_temizle(self, job_hash: str) -> None:
         try:
-            with self._baglanti_ac() as conn:
+            with closing(self._baglanti_ac()) as conn:
                 conn.execute("DELETE FROM tamamlanan_satirlar_v2 WHERE job_hash = ?", (job_hash,))
                 conn.commit()
         except Exception as e:
@@ -715,7 +1086,7 @@ class CheckpointYoneticisi:
 
 
 # ==============================================================================
-# 6. TOPLU SESLENDİRME ARKA PLAN İŞÇİSİ (GÜVENLİ YAŞAM DÖNGÜSÜ & CANCELTOKEN)
+# 6. TOPLU SESLENDİRME ARKA PLAN İŞÇİSİ (ÖZEL DOSYA ADI & GRUP İÇİ BİRLEŞTİRME)
 # ==============================================================================
 class StudyoBatchWorker(QThread):
     ilerleme_sinyali = Signal(int, int, str)
@@ -739,6 +1110,7 @@ class StudyoBatchWorker(QThread):
         kaynak_dosya_adi: str = "arayuz_listesi",
         sadece_secili_indisler: Optional[List[int]] = None,
         zorunlu_motor_tipi: Optional[str] = None,
+        gruplari_birlestir: bool = True,
     ):
         super().__init__()
         self.motor = motor
@@ -754,6 +1126,7 @@ class StudyoBatchWorker(QThread):
         self.kaynak_dosya_adi = kaynak_dosya_adi
         self.sadece_secili_indisler = set(sadece_secili_indisler) if sadece_secili_indisler is not None else None
         self.zorunlu_motor_tipi = zorunlu_motor_tipi or self.motor.motor_tipi
+        self.gruplari_birlestir = bool(gruplari_birlestir)
 
         self.cancel_token = CancelToken()
         self._durdur_istegi = False
@@ -773,10 +1146,6 @@ class StudyoBatchWorker(QThread):
             self.motor.durdur()
 
     def _deterministik_konusmaci_sesi_sec(self, grup_id: str, konusmaci: str, cinsiyet: str) -> str:
-        """
-        Diyaloglarda her konuşmacıya her çalıştırmada aynı sesi (deterministik) atar;
-        böylece yarıda kalan iş devam ettiğinde konuşmacının sesi değişmez.
-        """
         hedef_kat = rol_tahmin_et(konusmaci, cinsiyet)
         cins = "K" if str(cinsiyet or "E").upper().startswith("K") else "E"
         adaylar = [
@@ -795,6 +1164,51 @@ class StudyoBatchWorker(QThread):
         secim_idx = int(hashlib.sha1(imza.encode("utf-8")).hexdigest()[:8], 16) % len(adaylar)
         return adaylar[secim_idx]
 
+    def _satir_hedef_yollarini_hesapla(
+        self,
+        mod_alt_klasor: Path,
+        kayit: Dict[str, Any],
+        item_id: str,
+        grup_id: str,
+        sira_no: int,
+        uzanti: str,
+        cift_uretim_mi: bool,
+    ) -> Tuple[Path, Path]:
+        ozel_tek = guvenli_goreli_dosya_yolu_temizle(str(kayit.get("ses_dosyasi", "")), uzanti)
+        ozel_erkek = guvenli_goreli_dosya_yolu_temizle(str(kayit.get("ses_erkek", "")), uzanti)
+        ozel_kadin = guvenli_goreli_dosya_yolu_temizle(str(kayit.get("ses_kadin", "")), uzanti)
+
+        if cift_uretim_mi:
+            if ozel_erkek:
+                e_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, ozel_erkek)
+            elif ozel_tek:
+                e_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, f"erkek/{ozel_tek}")
+            else:
+                e_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, f"erkek/{item_id}{uzanti}")
+
+            if ozel_kadin:
+                k_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, ozel_kadin)
+            elif ozel_tek:
+                k_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, f"kadin/{ozel_tek}")
+            else:
+                k_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, f"kadin/{item_id}{uzanti}")
+
+            return e_yol, k_yol
+
+        if ozel_tek:
+            hedef_goreli = f"{grup_id}/{ozel_tek}" if (grup_id and "/" not in ozel_tek) else ozel_tek
+            tek_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, hedef_goreli)
+        elif ozel_erkek:
+            tek_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, ozel_erkek)
+        elif ozel_kadin:
+            tek_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, ozel_kadin)
+        elif grup_id:
+            tek_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, f"{grup_id}/satir_{sira_no:02d}{uzanti}")
+        else:
+            tek_yol = guvenli_hedef_yol_cozumle(mod_alt_klasor, f"{item_id}{uzanti}")
+
+        return tek_yol, Path("")
+
     def run(self) -> None:
         baslangic_zaman = time.time()
         toplam_hedef = len(self.sadece_secili_indisler) if self.sadece_secili_indisler is not None else len(self.kayitlar)
@@ -809,14 +1223,13 @@ class StudyoBatchWorker(QThread):
                 self.motor.aktif_motoru_degistir(self.zorunlu_motor_tipi)
 
             preset = self.config_manager.get_preset(self.mod_kodu)
-            dsp_ayar = preset.get("dsp", {})
-            hikmetli = bool(preset.get("hikmetli_durak_ekle", False))
             tek_kelime_mi = bool(preset.get("tek_kelime_mi", self.mod_kodu == "tek_kelime"))
             uzanti = ".wav" if str(preset.get("varsayilan_format", "wav")).lower() == "wav" else ".mp3"
             min_tok_ovr = preset.get("min_tokens")
             max_tok_ovr = preset.get("max_tokens")
 
             cp = CheckpointYoneticisi()
+            cp.eski_isleri_temizle(gun=30)
             job_hash = cp.is_ozeti_olustur(
                 kaynak_dosya_adi=self.kaynak_dosya_adi,
                 mod_kodu=self.mod_kodu,
@@ -831,7 +1244,8 @@ class StudyoBatchWorker(QThread):
             mod_alt_klasor = guvenli_hedef_yol_cozumle(self.cikti_kok_klasor, self.mod_kodu)
             mod_alt_klasor.mkdir(parents=True, exist_ok=True)
 
-            islenen_grup_idleri: set[str] = set()
+            islenen_grup_idleri: Set[str] = set()
+            grup_uretilen_dosyalar: Dict[str, List[str]] = {}
             islenen_sayac = 0
 
             for idx, kayit in enumerate(self.kayitlar):
@@ -848,12 +1262,33 @@ class StudyoBatchWorker(QThread):
                 try:
                     item_id = guvenli_kimlik_temizle(kayit.get("id", f"satir_{idx + 1:04d}"))
                     grup_id = guvenli_kimlik_temizle(kayit.get("grup_id", ""), varsayilan="")
+                    sira_no = int(kayit.get("sira", idx + 1)) if str(kayit.get("sira", idx + 1)).isdigit() else (idx + 1)
                     arapca = str(kayit.get("arapca", "")).strip()
                     if not arapca:
+                        atlanan_sayac += 1
+                        islenen_sayac += 1
+                        yuzde_str = f"%{int(round((islenen_sayac / max(1, toplam_hedef)) * 100))}"
+                        self.ilerleme_sinyali.emit(islenen_sayac, toplam_hedef, yuzde_str)
                         continue
 
+                    ton_detay = duygu_ve_tonlama_detayli_hesapla(arapca, preset, self.secilen_duygu_tonu)
+                    satir_hiz = ton_detay["hiz"]
+                    satir_temp = ton_detay["temp"]
+                    satir_top_p = ton_detay["top_p"]
+                    satir_top_k = ton_detay["top_k"]
+                    dsp_ayar = ton_detay["dsp"]
+                    hikmetli = ton_detay["hikmetli_durak"]
+
+                    sentez_ek_kimlik = {
+                        "hiz": satir_hiz,
+                        "temp": satir_temp,
+                        "top_p": satir_top_p,
+                        "top_k": satir_top_k,
+                        "duygu": self.secilen_duygu_tonu,
+                        "dsp": dsp_ayar,
+                    }
+
                     kelime_turu = str(kayit.get("kelime_turu", preset.get("kelime_turu", "genel")))
-                    # Arapça metin değişmişse eski akustik_metin'i kullanma; yeniden hesapla (Denetim F06)
                     guncel_metin_ozeti = hashlib.sha1(arapca.encode("utf-8")).hexdigest()[:10]
                     eski_ozet = str(kayit.get("kaynak_metin_ozeti", ""))
                     mevcut_akustik = str(kayit.get("akustik_metin", "")).strip()
@@ -868,9 +1303,7 @@ class StudyoBatchWorker(QThread):
                         akustik = mevcut_akustik
 
                     satir_ref_secimi = ses_secimi_kodunu_cozumle(str(kayit.get("referans_ses", "otomatik")))
-                    satir_hiz, satir_temp, _, _ = duygu_ve_tonlama_hesapla(arapca, preset, self.secilen_duygu_tonu)
 
-                    # Çift üretim mi yoksa tekil karakter mi karar ver
                     if satir_ref_secimi == "IKISI":
                         satir_cift_mi = True
                     elif satir_ref_secimi not in ("otomatik", ""):
@@ -882,11 +1315,13 @@ class StudyoBatchWorker(QThread):
 
                     if grup_id:
                         islenen_grup_idleri.add(grup_id)
+                        if grup_id not in grup_uretilen_dosyalar:
+                            grup_uretilen_dosyalar[grup_id] = []
 
-                    # A) ERKEK + KADIN ÇİFT ÜRETİM YOLU
                     if satir_cift_mi:
-                        erkek_hedef = guvenli_hedef_yol_cozumle(mod_alt_klasor, f"erkek/{item_id}{uzanti}")
-                        kadin_hedef = guvenli_hedef_yol_cozumle(mod_alt_klasor, f"kadin/{item_id}{uzanti}")
+                        erkek_hedef, kadin_hedef = self._satir_hedef_yollarini_hesapla(
+                            mod_alt_klasor, kayit, item_id, grup_id, sira_no, uzanti, cift_uretim_mi=True
+                        )
                         erkek_hedef.parent.mkdir(parents=True, exist_ok=True)
                         kadin_hedef.parent.mkdir(parents=True, exist_ok=True)
 
@@ -896,6 +1331,7 @@ class StudyoBatchWorker(QThread):
                             self.motor.motor_tipi,
                             f"{self.secilen_erkek_ref_id}+{self.secilen_kadin_ref_id}",
                             uzanti,
+                            ek_parametreler=sentez_ek_kimlik,
                         )
 
                         erkek_var = erkek_hedef.exists() and erkek_hedef.stat().st_size > 1000
@@ -903,8 +1339,7 @@ class StudyoBatchWorker(QThread):
                         cp_kayit = onceden_tamamlananlar.get(item_id)
                         parmak_izi_ayni = (cp_kayit is not None and cp_kayit.get("parmak_izi") == parmak_izi)
 
-                        # Yalnızca her iki dosya da fiziksel olarak diskte varsa ve parmak izi uyuşuyorsa atla!
-                        if self.mevcut_sesleri_atla and erkek_var and kadin_var and (parmak_izi_ayni or not cp_kayit):
+                        if self.mevcut_sesleri_atla and erkek_var and kadin_var and parmak_izi_ayni:
                             atlanan_sayac += 1
                             islenen_sayac += 1
                             self.satir_durum_sinyali.emit(
@@ -928,7 +1363,7 @@ class StudyoBatchWorker(QThread):
                             kelime_turu=kelime_turu,
                             tek_kelime_mi=tek_kelime_mi,
                             hikmetli_durak_ekle=hikmetli,
-                            wav_formatini_zorla=(uzanti == ".wav"),
+                            wav_formatini_zorla=(erkek_hedef.suffix.lower() == ".wav"),
                             ozel_ref_metin=e_metin,
                             onceden_hazirlanmis_akustik_metin=akustik,
                             min_tokens_override=min_tok_ovr,
@@ -936,6 +1371,8 @@ class StudyoBatchWorker(QThread):
                             dsp_ayar=dsp_ayar,
                             referans_ses_kullan=ref_kullan,
                             cancel_token=self.cancel_token,
+                            top_p_override=satir_top_p,
+                            top_k_override=satir_top_k,
                         )
 
                         if self._durdur_istegi or self.cancel_token.is_cancelled or self.motor.durdur_istegi:
@@ -953,7 +1390,7 @@ class StudyoBatchWorker(QThread):
                             kelime_turu=kelime_turu,
                             tek_kelime_mi=tek_kelime_mi,
                             hikmetli_durak_ekle=hikmetli,
-                            wav_formatini_zorla=(uzanti == ".wav"),
+                            wav_formatini_zorla=(kadin_hedef.suffix.lower() == ".wav"),
                             ozel_ref_metin=k_metin,
                             onceden_hazirlanmis_akustik_metin=akustik,
                             min_tokens_override=min_tok_ovr,
@@ -961,6 +1398,8 @@ class StudyoBatchWorker(QThread):
                             dsp_ayar=dsp_ayar,
                             referans_ses_kullan=ref_kullan,
                             cancel_token=self.cancel_token,
+                            top_p_override=satir_top_p,
+                            top_k_override=satir_top_k,
                         )
 
                         if self._durdur_istegi or self.cancel_token.is_cancelled or self.motor.durdur_istegi:
@@ -981,7 +1420,6 @@ class StudyoBatchWorker(QThread):
                             cp.kayit_guncelle(job_hash, item_id, parmak_izi, "hatali", hata_mesaji=gercek_hata)
                             self.satir_durum_sinyali.emit(idx, f"❌ Hata: {gercek_hata[:38]}", akustik, "", "")
 
-                    # B) TEKİL KARAKTER VEYA DİYALOG SATIRI ÜRETİM YOLU
                     else:
                         if satir_ref_secimi not in ("otomatik", "", "IKISI"):
                             hedef_ref_id = satir_ref_secimi
@@ -993,25 +1431,28 @@ class StudyoBatchWorker(QThread):
                             cins_kodu = str(kayit.get("cinsiyet", "E")).upper()
                             hedef_ref_id = self.secilen_kadin_ref_id if cins_kodu.startswith("K") else self.secilen_erkek_ref_id
 
-                        if grup_id:
-                            sira_no = int(kayit.get("sira", idx + 1))
-                            tek_hedef = guvenli_hedef_yol_cozumle(
-                                mod_alt_klasor, f"{grup_id}/satir_{sira_no:02d}{uzanti}"
-                            )
-                        else:
-                            tek_hedef = guvenli_hedef_yol_cozumle(mod_alt_klasor, f"{item_id}{uzanti}")
+                        tek_hedef, _ = self._satir_hedef_yollarini_hesapla(
+                            mod_alt_klasor, kayit, item_id, grup_id, sira_no, uzanti, cift_uretim_mi=False
+                        )
                         tek_hedef.parent.mkdir(parents=True, exist_ok=True)
 
                         parmak_izi = cp.satir_parmak_izi_olustur(
-                            arapca, akustik, self.motor.motor_tipi, hedef_ref_id, uzanti
+                            arapca,
+                            akustik,
+                            self.motor.motor_tipi,
+                            hedef_ref_id,
+                            tek_hedef.suffix,
+                            ek_parametreler=sentez_ek_kimlik,
                         )
                         dosya_var = tek_hedef.exists() and tek_hedef.stat().st_size > 1000
                         cp_kayit = onceden_tamamlananlar.get(item_id)
                         parmak_izi_ayni = (cp_kayit is not None and cp_kayit.get("parmak_izi") == parmak_izi)
 
-                        if self.mevcut_sesleri_atla and dosya_var and (parmak_izi_ayni or not cp_kayit):
+                        if self.mevcut_sesleri_atla and dosya_var and parmak_izi_ayni:
                             atlanan_sayac += 1
                             islenen_sayac += 1
+                            if grup_id:
+                                grup_uretilen_dosyalar[grup_id].append(str(tek_hedef))
                             self.satir_durum_sinyali.emit(idx, "⏭️ Atlandı (Mevcut)", akustik, str(tek_hedef), "")
                             yuzde_str = f"%{int(round((islenen_sayac / max(1, toplam_hedef)) * 100))}"
                             self.ilerleme_sinyali.emit(islenen_sayac, toplam_hedef, yuzde_str)
@@ -1035,7 +1476,7 @@ class StudyoBatchWorker(QThread):
                             kelime_turu=kelime_turu,
                             tek_kelime_mi=tek_kelime_mi,
                             hikmetli_durak_ekle=hikmetli,
-                            wav_formatini_zorla=(uzanti == ".wav"),
+                            wav_formatini_zorla=(tek_hedef.suffix.lower() == ".wav"),
                             ozel_ref_metin=ref_metin,
                             onceden_hazirlanmis_akustik_metin=akustik,
                             min_tokens_override=min_tok_ovr,
@@ -1043,6 +1484,8 @@ class StudyoBatchWorker(QThread):
                             dsp_ayar=dsp_ayar,
                             referans_ses_kullan=ref_kullan,
                             cancel_token=self.cancel_token,
+                            top_p_override=satir_top_p,
+                            top_k_override=satir_top_k,
                         )
 
                         if self._durdur_istegi or self.cancel_token.is_cancelled or self.motor.durdur_istegi:
@@ -1051,6 +1494,8 @@ class StudyoBatchWorker(QThread):
 
                         if ok_tek:
                             basarili_sayac += 1
+                            if grup_id:
+                                grup_uretilen_dosyalar[grup_id].append(str(tek_hedef))
                             cp.kayit_guncelle(job_hash, item_id, parmak_izi, "tamamlandi", str(tek_hedef), "")
                             self.satir_durum_sinyali.emit(idx, "✅ Tamamlandı", akustik, str(tek_hedef), "")
                         else:
@@ -1072,8 +1517,12 @@ class StudyoBatchWorker(QThread):
                     yuzde_str = f"%{int(round((islenen_sayac / max(1, toplam_hedef)) * 100))}"
                     self.ilerleme_sinyali.emit(islenen_sayac, toplam_hedef, yuzde_str)
 
-            # Grup bazlı (Diyalog / Uzun Metin) tam dosya birleştirme (Diskteki tüm satırları sırayla toplar)
-            if not self._durdur_istegi and not self.cancel_token.is_cancelled and islenen_grup_idleri:
+            if (
+                self.gruplari_birlestir
+                and not self._durdur_istegi
+                and not self.cancel_token.is_cancelled
+                and islenen_grup_idleri
+            ):
                 bosluk_ms = int(preset.get("birlesik_bosluk_ms", 400))
                 birlesik_ad = "diyalog_tamami.mp3" if self.mod_kodu == "diyalog" else "tamami.mp3"
 
@@ -1081,19 +1530,29 @@ class StudyoBatchWorker(QThread):
                     grup_klasor = guvenli_hedef_yol_cozumle(mod_alt_klasor, g_id)
                     if not grup_klasor.exists():
                         continue
-                    mevcut_parcalar = sorted(
-                        [
-                            str(p) for p in grup_klasor.iterdir()
-                            if p.is_file() and p.name.startswith("satir_") and p.stat().st_size > 800
-                        ]
-                    )
+
+                    # Önce bu çalıştırmada bu gruba ait üretilen/doğrulanan dosyaları al
+                    mevcut_parcalar = [
+                        p for p in grup_uretilen_dosyalar.get(g_id, [])
+                        if os.path.exists(p) and os.path.getsize(p) > 800
+                    ]
+                    if len(mevcut_parcalar) < 2:
+                        mevcut_parcalar = sorted(
+                            [
+                                str(p) for p in grup_klasor.iterdir()
+                                if p.is_file()
+                                and p.name != birlesik_ad
+                                and p.suffix.lower() in (".mp3", ".wav")
+                                and p.stat().st_size > 800
+                            ]
+                        )
                     if len(mevcut_parcalar) >= 2:
                         birlesik_hedef = grup_klasor / birlesik_ad
                         if sesleri_studyo_kalitesinde_birlestir(
                             girdi_dosyalari=mevcut_parcalar,
                             cikti_dosyasi=birlesik_hedef,
                             bosluk_ms=bosluk_ms,
-                            mikro_fade_ms=10,
+                            mikro_fade_ms=25,
                             birlestirilmis_seviye_dengele=True,
                         ):
                             birlestirilen_grup_sayac += 1

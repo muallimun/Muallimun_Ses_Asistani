@@ -12,16 +12,19 @@ import os
 import re
 import gc
 import sys
+import time
 import uuid
 import math
 import types
 import shutil
 import asyncio
 import hashlib
+import logging
+import warnings
 import functools
 import threading
-import warnings
 import subprocess
+import unicodedata
 import importlib.util
 import importlib.machinery
 from contextlib import nullcontext
@@ -34,14 +37,34 @@ import numpy as np
 # ==============================================================================
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["TRANSFORMERS_NO_TORCHVISION"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 os.environ["COQUI_TOS_AGREED"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+warnings.filterwarnings("ignore", category=UserWarning)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+
 sys.modules["torchvision"] = None
 
-CORE_DIR = Path(__file__).resolve().parent
-BASE_DIR = CORE_DIR.parent if CORE_DIR.name == "core" else CORE_DIR
-REF_CACHE_DIR = BASE_DIR / ".studyo_ref_cache_v4"
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).resolve().parent
+    CORE_DIR = BASE_DIR / "core"
+else:
+    CORE_DIR = Path(__file__).resolve().parent
+    BASE_DIR = CORE_DIR.parent if CORE_DIR.name == "core" else CORE_DIR
+
+# EXE yanında bulunan taşınabilir ffmpeg.exe'nin shutil.which("ffmpeg") tarafından otomatik bulunmasını sağlar
+if str(BASE_DIR) not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = str(BASE_DIR) + os.pathsep + os.environ.get("PATH", "")
+
+# Konsolsuz (--noconsole) EXE modunda print() ve HuggingFace indirme çubuklarının çökmesini önler
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+# v8: Doğal nefes korumalı, Raised-Cosine Crossfade destekli referans önbelleği
+REF_CACHE_DIR = BASE_DIR / ".studyo_ref_cache_v8"
 
 # ==============================================================================
 # 1. 8 STÜDYO REFERANS SES DOSYASI VE OKUTULAN ARAPÇA REFERANS METİNLERİ
@@ -70,6 +93,13 @@ TUM_8_REFERANS_SES = [
     "ref_kiz_cocuk_1.wav", "ref_kiz_cocuk_2.wav",
 ]
 
+YERLESIK_8_SES_STEMLERI = {
+    "ref_erkek_1", "ref_erkek_2",
+    "ref_erkek_cocuk_1", "ref_erkek_cocuk_2",
+    "ref_kadin_1", "ref_kadin_2",
+    "ref_kiz_cocuk_1", "ref_kiz_cocuk_2",
+}
+
 ANA_REF_ERKEK = "ref_erkek_1.wav"
 ANA_REF_KADIN = "ref_kadin_1.wav"
 
@@ -97,9 +127,10 @@ YETISKIN_ROLLER = [
     "dişçi", "disci", "hemşire", "hemsire", "ev sahibi", "emlakçı", "emlakci", "avukat", "hakim", "uzman", "muallim"
 ]
 
+# "öğrenci" yetişkin/genç sınıf diyaloglarında da geçtiği için yalnızca net çocuk ifadeleri çocuk sesine atanır
 COCUK_ROLLER = [
     "çocuk", "cocuk", "oğul", "ogul", "kızım", "kizim", "oğlum", "oglum",
-    "torun", "küçük", "kucuk", "öğrenci", "ogrenci", "bebek", "kardeş", "kardes"
+    "torun", "küçük", "kucuk", "bebek", "kardeş", "kardes", "yavrum"
 ]
 
 BOLUNMEZ_ARAPCA_EDATLAR = {
@@ -107,7 +138,8 @@ BOLUNMEZ_ARAPCA_EDATLAR = {
     "أَمَامَ", "خَلْفَ", "حَوْلَ", "عِنْدَ", "مُنْذُ", "حَتَّى", "أَنْ", "إِنْ",
     "إِنَّ", "أَنَّ", "كَأَنَّ", "لَكِنَّ", "لَعَلَّ", "لَيْتَ", "لَا", "مَا", "لَمْ",
     "لَنْ", "قَدْ", "سَوْفَ", "يَا", "أَيُّهَا", "أَيَّتُهَا", "هَذَا", "هَذِهِ",
-    "ذَلِكَ", "تِلْكَ", "الَّذِي", "الَّتِي", "الَّذِينَ", "كُلُّ", "كُلَّ", "بَعْضُ", "غَيْرُ"
+    "ذَلِكَ", "تِلْكَ", "الَّذِي", "الَّتِي", "الَّذِينَ", "كُلُّ", "كُلَّ", "بَعْضُ", "غَيْرُ",
+    "لَابُدَّ", "بُدَّ"
 }
 
 
@@ -127,11 +159,6 @@ def tr_kucult(metin: str) -> str:
 
 
 def rol_tahmin_et(konusmaci_adi: str, cinsiyet: str = "E") -> str:
-    """
-    Konuşmacı adından kategori tahmin eder.
-    Tanınmayan özel isimlerde (Ahmet, Ömer, Leyla vb.) varsayılan olarak YETİŞKİN döndürür;
-    yalnızca açıkça çocuk/öğrenci anahtar kelimesi varsa ÇOCUK döndürür.
-    """
     cins = "K" if str(cinsiyet or "E").strip().upper().startswith("K") else "E"
     kucuk = tr_kucult(konusmaci_adi)
     if any(k in kucuk for k in YETISKIN_ROLLER):
@@ -141,11 +168,35 @@ def rol_tahmin_et(konusmaci_adi: str, cinsiyet: str = "E") -> str:
     return f"yetiskin_{cins}"
 
 
+def yerlesik_ref_ses_mi(yol_veya_ad: str | Path) -> bool:
+    """Verilen ses dosyasının yerleşik 8 hazır stüdyo sesinden biri olup olmadığını döndürür."""
+    stem = Path(str(yol_veya_ad or "")).stem.lower()
+    temiz_stem = re.sub(r"_[0-9a-f]{12}$", "", stem)
+    return temiz_stem in YERLESIK_8_SES_STEMLERI
+
+
+def _eski_gecici_onbellek_dosyalarini_temizle(maks_yas_saniye: int = 3600) -> None:
+    """REF_CACHE_DIR içinde kalan geçici (_play_, _decode_, _direkt_tts_, _tmp_) dosyaları temizler."""
+    if not REF_CACHE_DIR.exists():
+        return
+    simdi = time.time()
+    gecici_onekler = ("_play_", "_decode_", "_direkt_tts_", "_tmp_")
+    try:
+        for p in REF_CACHE_DIR.iterdir():
+            if p.is_file() and p.name.startswith(gecici_onekler):
+                try:
+                    if (simdi - p.stat().st_mtime) > maks_yas_saniye:
+                        p.unlink()
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+
 # ==============================================================================
 # 1.A. İŞ PARÇACIĞI GÜVENLİ İPTAL ANAHTARI (CancelToken)
 # ==============================================================================
 class CancelToken:
-    """Her sentez işine özel, diğer işlerle çakışmayan bağımsız iptal jetonu."""
     def __init__(self) -> None:
         self._event = threading.Event()
 
@@ -164,9 +215,9 @@ DONANIM_PROFILLERI: Dict[str, Dict[str, Any]] = {
     "PRO_STUDYO_12GB_USTU": {
         "kod": "PRO_STUDYO_12GB_USTU",
         "ad": "🚀 Kademe 1: Pro Stüdyo Tam Kapasite (10 GB / 12 GB+ VRAM)",
-        "max_token_ust_sinir": 1100,
-        "kelime_token_carpani": 55,
-        "bolme_esigi_kelime": 32,
+        "max_token_ust_sinir": 1150,
+        "kelime_token_carpani": 52,
+        "bolme_esigi_kelime": 34,
         "parca_maks_kelime": 18,
         "her_uretimde_cache_temizle": False,
         "aciklama": "Uzun cümleleri tek nefeste, yüksek bellek bütçesiyle üretir.",
@@ -174,42 +225,65 @@ DONANIM_PROFILLERI: Dict[str, Dict[str, Any]] = {
     "DENGELI_8GB": {
         "kod": "DENGELI_8GB",
         "ad": "⚖️ Kademe 2: Dengeli Stüdyo Performansı (7 GB – 10 GB VRAM)",
-        "max_token_ust_sinir": 900,
-        "kelime_token_carpani": 50,
-        "bolme_esigi_kelime": 22,
-        "parca_maks_kelime": 14,
+        "max_token_ust_sinir": 950,
+        "kelime_token_carpani": 48,
+        "bolme_esigi_kelime": 26,
+        "parca_maks_kelime": 16,
         "her_uretimde_cache_temizle": False,
-        "aciklama": "Orta uzunluktaki cümleleri tek nefeste okur, uzun paragrafları doğal böler.",
+        "aciklama": "Orta ve uzun cümleleri tek nefeste okur, çok uzun paragrafları doğal böler.",
     },
     "HAFIF_4_6GB": {
         "kod": "HAFIF_4_6GB",
         "ad": "⚡ Kademe 3: Hafif ve Hızlı Laptop Modu (4 GB – 6 GB VRAM)",
-        "max_token_ust_sinir": 650,
+        "max_token_ust_sinir": 820,
         "kelime_token_carpani": 45,
-        "bolme_esigi_kelime": 14,
-        "parca_maks_kelime": 10,
+        "bolme_esigi_kelime": 22,
+        "parca_maks_kelime": 14,
         "her_uretimde_cache_temizle": True,
-        "aciklama": "BiCodec dinamik bellek yönetimi ile 4 GB – 6 GB VRAM ekran kartlarını koruyarak üretim yapar.",
+        "aciklama": "22 kelimeye kadar olan cümleleri tek nefeste okur; 4 GB – 6 GB VRAM ekran kartlarını korur.",
     },
     "CPU_MODU": {
         "kod": "CPU_MODU",
         "ad": "💻 Kademe 4: CPU (İşlemci) Modu (GPU Kullanmadan Üretim)",
-        "max_token_ust_sinir": 500,
+        "max_token_ust_sinir": 650,
         "kelime_token_carpani": 42,
-        "bolme_esigi_kelime": 12,
-        "parca_maks_kelime": 9,
+        "bolme_esigi_kelime": 18,
+        "parca_maks_kelime": 12,
         "her_uretimde_cache_temizle": False,
         "aciklama": "Ekran kartı belleğini kullanmadan işlemci (CPU) üzerinde güvenli üretim yapar.",
     },
 }
 
 _OZEL_REF_METIN_HARITASI: Dict[str, str] = {}
+_OZEL_REF_KATEGORI_HARITASI: Dict[str, Dict[str, str]] = {}
 
 
 def ozel_referans_metni_kaydet(ses_yolu_veya_ad: str, arapca_metin: str) -> None:
-    if arapca_metin and arapca_metin.strip():
-        _OZEL_REF_METIN_HARITASI[os.path.basename(str(ses_yolu_veya_ad)).lower()] = arapca_metin.strip()
-        _OZEL_REF_METIN_HARITASI[str(ses_yolu_veya_ad)] = arapca_metin.strip()
+    temiz = str(arapca_metin or "").strip()
+    anahtar_ad = os.path.basename(str(ses_yolu_veya_ad)).lower()
+    anahtar_stem = Path(str(ses_yolu_veya_ad)).stem.lower()
+    anahtar_tam = str(ses_yolu_veya_ad)
+    if temiz:
+        _OZEL_REF_METIN_HARITASI[anahtar_ad] = temiz
+        _OZEL_REF_METIN_HARITASI[anahtar_stem] = temiz
+        _OZEL_REF_METIN_HARITASI[anahtar_tam] = temiz
+    else:
+        _OZEL_REF_METIN_HARITASI.pop(anahtar_ad, None)
+        _OZEL_REF_METIN_HARITASI.pop(anahtar_stem, None)
+        _OZEL_REF_METIN_HARITASI.pop(anahtar_tam, None)
+
+
+def ozel_referans_kategori_kaydet(ses_yolu_veya_ad: str, cinsiyet: str = "E", kategori: str = "yetiskin_E") -> None:
+    """Özel eklenen referans seslerin cinsiyet ve rol kategorisini Direkt TTS eşleştirmesi için kaydeder."""
+    cins = "K" if str(cinsiyet or "E").upper().startswith("K") else "E"
+    kat = str(kategori or f"yetiskin_{cins}").strip()
+    bilgi = {"cinsiyet": cins, "kategori": kat}
+    anahtar_ad = os.path.basename(str(ses_yolu_veya_ad)).lower()
+    anahtar_stem = Path(str(ses_yolu_veya_ad)).stem.lower()
+    anahtar_tam = str(ses_yolu_veya_ad)
+    _OZEL_REF_KATEGORI_HARITASI[anahtar_ad] = bilgi
+    _OZEL_REF_KATEGORI_HARITASI[anahtar_stem] = bilgi
+    _OZEL_REF_KATEGORI_HARITASI[anahtar_tam] = bilgi
 
 
 def referans_metni_getir(
@@ -218,18 +292,32 @@ def referans_metni_getir(
     ozel_ref_metin: Optional[str] = None,
     **kwargs,
 ) -> str:
-    secilen_ozel = ozel_metin or ozel_ref_metin
-    if secilen_ozel and str(secilen_ozel).strip():
+    """
+    Referans sese ait Arapça metni döndürür.
+    KRİTİK KORUMA:
+    - Yerleşik 8 hazır ses için her zaman kendi REF_METIN_1 veya REF_METIN_2 metnini döndürür.
+    - Kullanıcı tarafından eklenen özel seslerde ('ozel_...') metin boş bırakılmışsa
+      ASLA 'REF_METIN_1' döndürmez; '' (boş metin) döndürür.
+    """
+    secilen_ozel = ozel_metin if ozel_metin is not None else ozel_ref_metin
+    if secilen_ozel is not None and str(secilen_ozel).strip():
         return str(secilen_ozel).strip()
+
     tam_str = str(wav_dosya_adi)
     ad = os.path.basename(tam_str).lower()
-    if tam_str in _OZEL_REF_METIN_HARITASI:
-        return _OZEL_REF_METIN_HARITASI[tam_str]
-    if ad in _OZEL_REF_METIN_HARITASI:
-        return _OZEL_REF_METIN_HARITASI[ad]
-    if "_2" in ad:
-        return REF_METIN_2
-    return REF_METIN_1
+    stem = Path(tam_str).stem.lower()
+    temiz_stem = re.sub(r"_[0-9a-f]{12}$", "", stem)
+
+    for aday in (tam_str, ad, stem, temiz_stem):
+        if aday in _OZEL_REF_METIN_HARITASI:
+            return _OZEL_REF_METIN_HARITASI[aday]
+
+    if yerlesik_ref_ses_mi(tam_str):
+        if "_2" in ad:
+            return REF_METIN_2
+        return REF_METIN_1
+
+    return ""
 
 
 import torch
@@ -238,12 +326,12 @@ from scipy import signal
 
 
 def _yuksek_kalite_resample(veri: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
-    """Anti-aliasing filtreli polinom yeniden örnekleme (soxr / resample_poly)."""
+    """Anti-aliasing filtreli yüksek kaliteli yeniden örnekleme (soxr / resample_poly)."""
     if orig_sr == target_sr or veri.size == 0:
         return veri.astype(np.float32)
     try:
         import soxr
-        return soxr.resample(veri, orig_sr, target_sr, quality="HQ").astype(np.float32)
+        return soxr.resample(veri, orig_sr, target_sr, quality="VHQ").astype(np.float32)
     except Exception:
         ortak = math.gcd(int(orig_sr), int(target_sr))
         up = int(target_sr) // ortak
@@ -551,7 +639,6 @@ def gpu_bellegini_optimize_et(
     zorunlu_kademe_kodu: Optional[str] = None,
 ) -> Dict[str, Any]:
     bilgi = gpu_vram_durumu_getir()
-    # Kullanıcının açıkça seçtiği kademeye (CPU_MODU dahil) saygı duy!
     if zorunlu_kademe_kodu and zorunlu_kademe_kodu in DONANIM_PROFILLERI:
         secilen_kod = zorunlu_kademe_kodu
     else:
@@ -560,10 +647,12 @@ def gpu_bellegini_optimize_et(
     gc.collect()
     if torch.cuda.is_available():
         try:
-            # Değişken uzunluklu TTS tensörlerinde cudnn.benchmark=False olmalı
             torch.backends.cudnn.benchmark = False
             torch.backends.cuda.matmul.allow_tf32 = True
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
         except Exception:
             pass
     else:
@@ -586,9 +675,24 @@ def gpu_bellegini_optimize_et(
 # 4. FASİH ARAPÇA FONETİK VAKIF & VASIL ÖN-İŞLEME MOTORU
 # ==============================================================================
 def hareke_siralamasini_normallestir(metin: str) -> str:
-    metin = re.sub(r"([\u064B-\u0650])(\u0651)", r"\2\1", metin)
+    if not metin:
+        return ""
+    metin = unicodedata.normalize("NFC", str(metin))
+    metin = metin.replace("\u0640", "")
+    # Hareke + Şedde -> Şedde + Hareke
+    metin = re.sub(r"([\u064B-\u0650\u0652\u0670])(\u0651)", r"\2\1", metin)
     metin = metin.replace("آَ", "آ").replace("آُ", "آ").replace("آِ", "آ")
     metin = re.sub(r"([\u064B-\u0652])\1+", r"\1", metin)
+
+    # Med harflerinin üzerindeki yanlış sükûnları temizle (فِيْ -> فِي)
+    metin = re.sub(r"\u0650\u064A\u0652", "\u0650\u064A", metin)
+    metin = re.sub(r"\u064F\u0648\u0652", "\u064F\u0648", metin)
+    metin = metin.replace("اْ", "ا")
+
+    # Cümle ortası ve tek/çift önekli (وَالْ، فَبِالْ، وَبِالْ، وَلِلْ) vasıl hemzesi normalizasyonu
+    metin = re.sub(r"(?<=\s)اَل(?=[ْ\u0621-\u064A])", "ال", metin)
+    metin = re.sub(r"([وفبلك][\u064E\u0650\u064F]?)اَل(?=[ْ\u0621-\u064A])", r"\1ال", metin)
+    metin = re.sub(r"([وف][\u064E\u0650\u064F]?[بلك][\u064E\u0650\u064F]?)اَل(?=[ْ\u0621-\u064A])", r"\1ال", metin)
     return metin
 
 
@@ -605,8 +709,13 @@ def kelime_sonunu_vakif_yap(kelime: str, kelime_turu: str = "genel") -> str:
     if not hareke_var_mi:
         return govde + noktalama
 
+    # Tek kelime modunda kullanıcı özellikle 'Fiil (Son Harekeyi Koru)' seçtiyse:
+    # (Ancak fiilde yanlışlıkla tenvin varsa tenvini düşür)
     if kelime_turu == "fiil":
+        govde = re.sub(r"[\u064B-\u064D]+$", "\u0652", govde)
         return govde + noktalama
+
+    # 1. Medd-i İvaz (كِتَابًا -> كِتَابَا)
     if re.search(r"\u064B([\u0627\u0649])$", govde):
         govde = re.sub(r"\u064B([\u0627\u0649])$", "\u064E\\1", govde)
         return govde + noktalama
@@ -616,14 +725,18 @@ def kelime_sonunu_vakif_yap(kelime: str, kelime_turu: str = "genel") -> str:
     if re.search(r"\u0621\u064B$", govde):
         govde = re.sub(r"\u0621\u064B$", "\u0621\u064E\u0627", govde)
         return govde + noktalama
-    if re.search(r"\u0629[\u064B-\u0652]+$", govde):
-        govde = re.sub(r"\u0629[\u064B-\u0652]+$", "\u0647\u0652", govde)
+    # 2. Tâ-i Merbûta -> Sükûnlu Hâ (مَدْرَسَةٌ -> مَدْرَسَهْ)
+    if re.search(r"\u0629[\u064B-\u0652]*$", govde):
+        govde = re.sub(r"\u0629[\u064B-\u0652]*$", "\u0647\u0652", govde)
         return govde + noktalama
+    # 3. Şeddeli son harf vakfı
     if re.search(r"\u0651[\u064B-\u0650]+$", govde):
         govde = re.sub(r"\u0651[\u064B-\u0650]+$", "\u0651", govde)
         return govde + noktalama
+    # 4. Med / illet harfiyle biten isim ve fiiller (يَدْعُو، يَرْمِي، تَفْقِدُهُمَا)
     if re.search(r"[\u0627\u0648\u064A\u0649]$", govde):
         return govde + noktalama
+    # 5. Sahih harfle biten tüm isim ve fiillerde son kısa harekeyi/tenvini sükûna çevir (كَتَبَ -> كَتَبْ، يَكْتُبُ -> يَكْتُبْ)
     govde = re.sub(r"[\u064B-\u0650]+$", "\u0652", govde)
     return govde + noktalama
 
@@ -644,7 +757,6 @@ def arapca_akustik_metin_hazirla(
         .replace("(", "")
         .replace(")", "")
     )
-    # Saat ifadelerindeki (10:30) iki noktayı koru; yalnızca harften sonra gelen ':' işaretini '،' yap
     temiz = re.sub(r"(?<!\d):(?!\d)", "،", temiz)
 
     if hikmetli_durak_ekle and "،" not in temiz:
@@ -671,7 +783,6 @@ def arapca_akustik_metin_hazirla(
             islenmis.append(klm)
 
     sonuc = " ".join(islenmis)
-    # Virgül ile bitiyorsa '،.' hatası oluşmaması için virgülü koru veya nokta ile değiştir
     if ara_parca_mi:
         if not re.search(r"[.،؛؟!?,:;…]$", sonuc):
             sonuc += "،"
@@ -682,16 +793,224 @@ def arapca_akustik_metin_hazirla(
     return sonuc
 
 
+def _referans_prompt_metni_hazirla(ref_metin: str, yerlesik_mi: bool = False) -> str:
+    """
+    Referans seste okunan Arapça metni (Prompt Text) Spark-TTS için hazırlar.
+    - Yerleşik 8 seste REF_METIN_1 / REF_METIN_2 olduğu gibi korunur.
+    - Kullanıcı özel seslerinde cümle ortasındaki noktalar ('.', '؟', '!', '؛') virgüle ('،') çevrilir ki
+      LLM referans metnin ortasında erken EOS (cümle bitişi) üretip cızırtıya girmesin!
+    """
+    temiz = str(ref_metin or "").strip()
+    if not temiz:
+        return ""
+    if yerlesik_mi:
+        return temiz
+
+    temiz = hareke_siralamasini_normallestir(temiz)
+    temiz = re.sub(r"[«»\"“”()]", "", temiz)
+    govde = re.sub(r"[.،؛؟!?,:;…]+$", "", temiz).strip()
+    govde = re.sub(r"[.؟!?;:؛]+\s*", "، ", govde)
+    govde = re.sub(r"\s{2,}", " ", govde).strip()
+    if not govde:
+        return ""
+    return govde + "."
+
+
 # ==============================================================================
-# 5. 5 KATMANLI STÜDYO DSP MASTERING VE İÇERİK HASH'Lİ REFERANS HAZIRLAYICI
+# 5. ÖZEL REFERANS SES İÇ BOŞLUK SIKIŞTIRICI, CIZIRTI DENETLEYİCİ VE DSP MASTERING
 # ==============================================================================
+def _ozel_referans_ses_ic_bosluk_sikistir(
+    audio: np.ndarray,
+    sample_rate: int = 24000,
+    maks_ic_bosluk_ms: float = 280.0,
+    hedef_ic_bosluk_ms: float = 150.0,
+    maks_toplam_sure_sn: float = 9.0,
+) -> np.ndarray:
+    """
+    Kullanıcının eklediği özel referans seslerde doğal nefes ve konuşma ritmini koruyarak
+    aşırı uzun (280 ms üstü) ölü sessizlik koridorlarını 150 ms doğal nefes payına sıkıştırır,
+    birleştirme noktalarında 15 ms Raised-Cosine yumuşatma uygular ve sondaki ölü kuyruğu kırpar.
+    """
+    veri = np.asarray(audio, dtype=np.float32).flatten()
+    if veri.size < int(sample_rate * 0.4):
+        return veri
+
+    veri = veri - np.mean(veri)
+    tepe = float(np.max(np.abs(veri)))
+    if tepe < 1e-5:
+        return veri
+    veri = (veri / tepe) * 0.891
+
+    win_len = max(1, int(sample_rate * 0.020))
+    kernel = np.ones(win_len, dtype=np.float32) / float(win_len)
+    rms = np.sqrt(np.convolve(veri ** 2, kernel, mode="same")[:veri.size] + 1e-12)
+    rms_tepe = float(np.max(rms)) if np.max(rms) > 1e-6 else 1.0
+
+    # Nefes ve hafif son harfleri korumak için hassas eşik (%2.5)
+    aktif_maske = rms > (rms_tepe * 0.025)
+    if not np.any(aktif_maske):
+        return veri
+
+    maks_bosluk_ornek = int(sample_rate * (maks_ic_bosluk_ms / 1000.0))
+    hedef_bosluk_ornek = int(sample_rate * (hedef_ic_bosluk_ms / 1000.0))
+    min_ada_ornek = int(sample_rate * 0.075)
+
+    fark = np.diff(aktif_maske.astype(np.int8))
+    baslar = list(np.where(fark == 1)[0] + 1)
+    sonlar = list(np.where(fark == -1)[0] + 1)
+    if aktif_maske[0]:
+        baslar.insert(0, 0)
+    if aktif_maske[-1]:
+        sonlar.append(veri.size)
+
+    ham_adalar: List[Tuple[int, int]] = []
+    for b, s in zip(baslar, sonlar):
+        if s - b >= min_ada_ornek:
+            ham_adalar.append((b, s))
+
+    if not ham_adalar:
+        return veri
+
+    birlesik_adalar: List[List[int]] = [[ham_adalar[0][0], ham_adalar[0][1]]]
+    for b, s in ham_adalar[1:]:
+        if b - birlesik_adalar[-1][1] <= maks_bosluk_ornek:
+            birlesik_adalar[-1][1] = s
+        else:
+            birlesik_adalar.append([b, s])
+
+    parcalar: List[np.ndarray] = []
+    ara_sessizlik = np.zeros(hedef_bosluk_ornek, dtype=np.float32)
+    # 15 ms Raised-Cosine yumuşak geçiş (Zero-crossing tıklamalarını önler)
+    fade_n = max(1, int(sample_rate * 0.015))
+    giris_egrisi = 0.5 * (1.0 - np.cos(np.linspace(0.0, math.pi, fade_n, dtype=np.float32)))
+    cikis_egrisi = 0.5 * (1.0 + np.cos(np.linspace(0.0, math.pi, fade_n, dtype=np.float32)))
+
+    bas_pad = int(sample_rate * 0.060)
+    son_pad = int(sample_rate * 0.095)
+
+    for idx, (b, s) in enumerate(birlesik_adalar):
+        b_pay = max(0, b - (bas_pad if idx == 0 else int(sample_rate * 0.035)))
+        s_pay = min(veri.size, s + (son_pad if idx == len(birlesik_adalar) - 1 else int(sample_rate * 0.045)))
+        dilim = veri[b_pay:s_pay].copy()
+        if dilim.size > fade_n * 3:
+            dilim[:fade_n] *= giris_egrisi
+            dilim[-fade_n:] *= cikis_egrisi
+        parcalar.append(dilim)
+        if idx < len(birlesik_adalar) - 1:
+            parcalar.append(ara_sessizlik)
+
+    sikistirilmis = np.concatenate(parcalar).astype(np.float32)
+
+    maks_ornek = int(sample_rate * maks_toplam_sure_sn)
+    if sikistirilmis.size > maks_ornek:
+        sikistirilmis = sikistirilmis[:maks_ornek].copy()
+        son_fade = min(int(sample_rate * 0.075), sikistirilmis.size // 4)
+        if son_fade > 0:
+            son_e = 0.5 * (1.0 + np.cos(np.linspace(0.0, math.pi, son_fade, dtype=np.float32)))
+            sikistirilmis[-son_fade:] *= son_e
+
+    son_tepe = float(np.max(np.abs(sikistirilmis)))
+    if son_tepe > 1e-6:
+        sikistirilmis = (sikistirilmis / son_tepe) * 0.891
+    return sikistirilmis
+
+
+def _ses_cizirti_veya_bozuk_mu(wav_np: np.ndarray, sample_rate: int = 24000) -> bool:
+    """
+    Üretilen sesin sabit genlikli cızırtı / osilasyon döngüsüne girip girmediğini tespit eder.
+    - 0.15 sn altındaki aşırı kısa çıktılar bozuk/boş kabul edilir.
+    - 0.15 sn - 0.45 sn arasındaki çıktılar kısa tek kelime ('كِتَابٌ' vb.) olabileceği için
+      yeterli sinyal enerjisi varsa geçerli kabul edilir (yanlış alarm önlenir).
+    """
+    veri = np.asarray(wav_np, dtype=np.float32).flatten()
+    if veri.size < int(sample_rate * 0.15):
+        return True
+
+    if veri.size < int(sample_rate * 0.45):
+        return float(np.max(np.abs(veri))) < 1e-4
+
+    cerceve_boyu = max(1, int(sample_rate * 0.025))
+    tam_boy = (veri.size // cerceve_boyu) * cerceve_boyu
+    if tam_boy < cerceve_boyu * 8:
+        return False
+
+    matris = veri[:tam_boy].reshape(-1, cerceve_boyu)
+    cerceve_rms = np.sqrt(np.mean(matris ** 2, axis=1) + 1e-12)
+    tepe_rms = float(np.max(cerceve_rms))
+    if tepe_rms < 1e-4:
+        return True
+
+    aktif_rms = cerceve_rms[cerceve_rms > (tepe_rms * 0.12)]
+    if aktif_rms.size < 6:
+        return True
+
+    ortalama = float(np.mean(aktif_rms))
+    std = float(np.std(aktif_rms))
+    degisim_katsayisi = std / max(1e-6, ortalama)
+
+    sure_sn = float(veri.size) / float(sample_rate)
+    if sure_sn > 1.2 and degisim_katsayisi < 0.23:
+        return True
+
+    return False
+
+
+def _ses_dogallik_puani_hesapla(wav_np: np.ndarray, sample_rate: int = 24000) -> float:
+    """Best-of-2 seçimi için sesin zarf dinamizmini (CV) ve geçerliliğini puanlar."""
+    veri = np.asarray(wav_np, dtype=np.float32).flatten()
+    if veri.size < int(sample_rate * 0.15):
+        return 0.0
+    cerceve_boyu = max(1, int(sample_rate * 0.025))
+    tam_boy = (veri.size // cerceve_boyu) * cerceve_boyu
+    if tam_boy < cerceve_boyu * 4:
+        return 0.5
+    matris = veri[:tam_boy].reshape(-1, cerceve_boyu)
+    cerceve_rms = np.sqrt(np.mean(matris ** 2, axis=1) + 1e-12)
+    tepe_rms = float(np.max(cerceve_rms))
+    if tepe_rms < 1e-4:
+        return 0.0
+    aktif_rms = cerceve_rms[cerceve_rms > (tepe_rms * 0.12)]
+    if aktif_rms.size < 4:
+        return 0.1
+    cv = float(np.std(aktif_rms)) / max(1e-6, float(np.mean(aktif_rms)))
+    return cv
+
+
+def _token_tekrar_dongusu_var_mi(token_dizisi: List[int]) -> bool:
+    """Üretilen semantik tokenlarda aynı 1-4 tokenlık kalıbın arka arkaya 16+ kez tekrarlanıp tekrarlanmadığını denetler."""
+    if len(token_dizisi) < 35:
+        return False
+    sayac = 1
+    for i in range(1, len(token_dizisi)):
+        if token_dizisi[i] == token_dizisi[i - 1]:
+            sayac += 1
+            if sayac >= 16:
+                return True
+        else:
+            sayac = 1
+    son_dilim = token_dizisi[-60:] if len(token_dizisi) >= 60 else token_dizisi
+    if len(son_dilim) >= 45 and len(set(son_dilim)) <= 4:
+        return True
+    return False
+
+
 def studyo_dsp_mastering(
     wav_np: np.ndarray,
     sample_rate: int = 24000,
     tek_kelime_mi: bool = False,
     referans_on_temizlik_mi: bool = False,
+    ozel_referans_mi: bool = False,
     dsp_ayar: Optional[Dict[str, Any]] = None,
 ) -> np.ndarray:
+    """
+    5-Katmanlı 24kHz Stüdyo DSP Mastering (Anti-Aliasing Sıralamalı):
+      1. DC Offset Temizliği
+      2. Sıfır Fazlı Butterworth High-Pass Filtre (sosfiltfilt)
+      3. Doğal Nefes Korumalı Yumuşak RMS Gate
+      4. Asimetrik Başlangıç ve Bitiş Kırpma (Preset son_pay_ms değerine saygılı: 80ms - 450ms)
+      5. Harmonik Sıcaklık (Tanh Drive: 1.00 - 1.22) -> Anti-Aliasing Butterworth Low-Pass Filtre (LPF, Drive'dan SONRA!)
+      6. Kosinüs Eğrili (Raised-Cosine) Giriş ve 150ms Doğal Çıkış + 120ms Sessizlik Yastığı
+    """
     audio = np.asarray(wav_np, dtype=np.float32)
     if audio.ndim > 1:
         audio = np.mean(audio, axis=-1)
@@ -699,50 +1018,65 @@ def studyo_dsp_mastering(
     if audio.size < 200:
         return audio
 
-    # NaN / Inf koruması
     if not np.all(np.isfinite(audio)):
         audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
-    dsp_ayar = dsp_ayar or {}
-    hp_istek = float(dsp_ayar.get("hp_freq", 80.0))
-    lp_istek = float(dsp_ayar.get("lp_freq", 11200.0))
-    # Arapça kelime sonu hafif harfleri (ه، ح، ث، س) korumak için yumuşak gate eşiği
-    varsayilan_gate = 0.028 if tek_kelime_mi else 0.022
-    gate_katsayi = 0.015 if referans_on_temizlik_mi else float(dsp_ayar.get("gate_esigi", varsayilan_gate))
-    aktif_esik_katsayi = 0.022 if referans_on_temizlik_mi else float(dsp_ayar.get("aktif_esik_katsayi", 0.022))
-
-    varsayilan_bas_ms = 40.0 if tek_kelime_mi else 55.0
-    varsayilan_son_ms = 140.0 if tek_kelime_mi else 175.0
-    bas_pay_sn = 0.035 if referans_on_temizlik_mi else (float(dsp_ayar.get("bas_pay_ms", varsayilan_bas_ms)) / 1000.0)
-    son_pay_sn = 0.050 if referans_on_temizlik_mi else (float(dsp_ayar.get("son_pay_ms", varsayilan_son_ms)) / 1000.0)
-
-    # Referans ses ön-temizliğinde konuşmacı tınısını boyamamak için tanh drive uygulanmaz!
-    varsayilan_drive = 1.0 if referans_on_temizlik_mi else (1.14 if tek_kelime_mi else 1.10)
-    drive = 1.0 if referans_on_temizlik_mi else float(dsp_ayar.get("drive", varsayilan_drive))
-    fade_sn = float(dsp_ayar.get("fade_ms", 8.0)) / 1000.0
-    tepe_norm = float(dsp_ayar.get("tepe_normalizasyon", 0.891))
-
     audio = audio - np.mean(audio)
 
+    if referans_on_temizlik_mi:
+        if ozel_referans_mi:
+            return _ozel_referans_ses_ic_bosluk_sikistir(audio, sample_rate=sample_rate)
+        abs_ref = np.abs(audio)
+        peak_ref = float(np.max(abs_ref)) if np.max(abs_ref) > 1e-6 else 1.0
+        aktif_ref = np.where(abs_ref > (peak_ref * 0.005))[0]
+        if aktif_ref.size > 0:
+            bas_r = max(0, int(aktif_ref[0]) - int(sample_rate * 0.080))
+            son_r = min(audio.size, int(aktif_ref[-1]) + int(sample_rate * 0.160))
+            audio = audio[bas_r:son_r]
+        max_r = float(np.max(np.abs(audio)))
+        if max_r > 1e-6:
+            audio = (audio / max_r) * 0.891
+        return audio.astype(np.float32)
+
+    dsp_ayar = dsp_ayar or {}
+    hp_istek = float(dsp_ayar.get("hp_freq", 75.0))
+    lp_istek = float(dsp_ayar.get("lp_freq", 11200.0))
+    varsayilan_gate = 0.018 if tek_kelime_mi else 0.014
+    gate_katsayi = float(dsp_ayar.get("gate_esigi", varsayilan_gate))
+    bas_aktif_esik = float(dsp_ayar.get("aktif_esik_katsayi", 0.018))
+    son_aktif_esik = min(0.005, bas_aktif_esik * 0.25)
+
+    varsayilan_bas_ms = 45.0 if tek_kelime_mi else 55.0
+    varsayilan_son_ms = 220.0 if tek_kelime_mi else 260.0
+    bas_pay_sn = max(0.030, min(0.250, float(dsp_ayar.get("bas_pay_ms", varsayilan_bas_ms)) / 1000.0))
+    # Preset ve tonlama profillerinin son_pay_ms (80ms - 450ms) değerine tam saygı gösterilir
+    son_pay_sn = max(0.080, min(0.450, float(dsp_ayar.get("son_pay_ms", varsayilan_son_ms)) / 1000.0))
+
+    drive = float(dsp_ayar.get("drive", 1.06))
+    bas_fade_sn = max(0.008, min(0.060, float(dsp_ayar.get("fade_ms", 12.0)) / 1000.0))
+    son_fade_sn = 0.120 if tek_kelime_mi else 0.150
+    tepe_norm = float(dsp_ayar.get("tepe_normalizasyon", 0.891))
+
+    nyq = sample_rate * 0.5
+
+    # 1. Sıfır Fazlı Butterworth High-Pass Filtre (Dip uğultusu ve plosive temizliği)
     try:
-        nyq = sample_rate * 0.5
-        hp_freq = min(max(40.0, hp_istek), nyq * 0.8)
-        lp_freq = min(max(4000.0, lp_istek), nyq * 0.94)
-        sos_hp = signal.butter(4, hp_freq, btype="highpass", fs=sample_rate, output="sos")
-        sos_lp = signal.butter(4, lp_freq, btype="lowpass", fs=sample_rate, output="sos")
+        hp_freq = min(max(45.0, hp_istek), nyq * 0.8)
+        sos_hp = signal.butter(2, hp_freq, btype="highpass", fs=sample_rate, output="sos")
         audio = signal.sosfiltfilt(sos_hp, audio).astype(np.float32)
-        audio = signal.sosfiltfilt(sos_lp, audio).astype(np.float32)
     except Exception:
         pass
 
+    # 2. Doğal Nefes Korumalı Yumuşak RMS Gürültü Kapısı
     if gate_katsayi > 0.005:
-        win_len = max(1, min(int(sample_rate * 0.020), audio.size // 2))
+        win_len = max(1, min(int(sample_rate * 0.025), audio.size // 2))
         kernel = np.ones(win_len, dtype=np.float32) / float(win_len)
         rms = np.sqrt(np.convolve(audio ** 2, kernel, mode="same")[:audio.size] + 1e-12)
         peak_rms = float(np.max(rms)) if np.max(rms) > 1e-6 else 1.0
-        gate_esigi = peak_rms * gate_katsayi
-        kazanc = np.clip((rms - gate_esigi * 0.30) / (gate_esigi * 0.70 + 1e-9), 0.0, 1.0) ** 1.3
-        yumusatma_penceresi = max(1, min(int(sample_rate * 0.040), audio.size // 2))
+        gate_esigi = peak_rms * min(0.026, gate_katsayi)
+        ham_oran = np.clip((rms - gate_esigi * 0.25) / (gate_esigi * 0.75 + 1e-9), 0.0, 1.0)
+        kazanc = 0.22 + 0.78 * (ham_oran ** 1.15)
+        yumusatma_penceresi = max(1, min(int(sample_rate * 0.060), audio.size // 2))
         yumusak_kazanc = np.convolve(
             kazanc,
             np.ones(yumusatma_penceresi, dtype=np.float32) / float(yumusatma_penceresi),
@@ -750,39 +1084,57 @@ def studyo_dsp_mastering(
         )[:audio.size]
         audio = (audio * yumusak_kazanc).astype(np.float32)
 
+    # 3. Asimetrik Başlangıç ve Bitiş Kırpma
     abs_audio = np.abs(audio)
     peak = float(np.max(abs_audio)) if np.max(abs_audio) > 1e-6 else 1.0
-    aktif_indisler = np.where(abs_audio > (peak * aktif_esik_katsayi))[0]
-    if aktif_indisler.size > 0:
+    bas_indisler = np.where(abs_audio > (peak * bas_aktif_esik))[0]
+    son_indisler = np.where(abs_audio > (peak * son_aktif_esik))[0]
+
+    if bas_indisler.size > 0 and son_indisler.size > 0:
         bas_pay = int(sample_rate * bas_pay_sn)
         son_pay = int(sample_rate * son_pay_sn)
-        bas = max(0, int(aktif_indisler[0]) - bas_pay)
-        son = min(audio.size, int(aktif_indisler[-1]) + son_pay)
-        audio = audio[bas:son]
+        bas = max(0, int(bas_indisler[0]) - bas_pay)
+        son = min(audio.size, int(son_indisler[-1]) + son_pay)
+        if son > bas + 400:
+            audio = audio[bas:son]
 
+    # 4. Harmonik Sıcaklık (Tanh Drive: 1.00 - 1.22) — Low-Pass Filtreden ÖNCE uygulanır!
     max_deger = float(np.max(np.abs(audio)))
     if max_deger > 1e-6:
         audio = audio / max_deger
-        if not referans_on_temizlik_mi and drive > 1.02:
-            audio = (np.tanh(audio * drive) / np.tanh(drive)).astype(np.float32)
+        etkin_drive = min(1.22, max(1.0, drive))
+        if etkin_drive > 1.01:
+            audio = (np.tanh(audio * etkin_drive) / np.tanh(etkin_drive)).astype(np.float32)
 
-    fade_uzunlugu = min(int(sample_rate * fade_sn), audio.size // 4)
-    if fade_uzunlugu > 0:
-        audio[:fade_uzunlugu] *= np.linspace(0.0, 1.0, fade_uzunlugu, dtype=np.float32)
-        audio[-fade_uzunlugu:] *= np.linspace(1.0, 0.0, fade_uzunlugu, dtype=np.float32)
+    # 5. Anti-Aliasing Butterworth Low-Pass Filtre (Tanh Drive'ın ürettiği üst harmonik parazitleri süzer)
+    try:
+        lp_freq = min(max(6000.0, lp_istek), nyq * 0.95)
+        sos_lp = signal.butter(4, lp_freq, btype="lowpass", fs=sample_rate, output="sos")
+        audio = signal.sosfiltfilt(sos_lp, audio).astype(np.float32)
+    except Exception:
+        pass
+
+    # 6. Kosinüs Eğrili (Raised-Cosine) Giriş (Fade-In) ve Doğal Çıkış (Fade-Out)
+    bas_fade_n = min(int(sample_rate * bas_fade_sn), audio.size // 6)
+    if bas_fade_n > 0:
+        giris_egrisi = 0.5 * (1.0 - np.cos(np.linspace(0.0, math.pi, bas_fade_n, dtype=np.float32)))
+        audio[:bas_fade_n] *= giris_egrisi
+
+    son_fade_n = min(int(sample_rate * son_fade_sn), audio.size // 3)
+    if son_fade_n > 0:
+        cikis_egrisi = 0.5 * (1.0 + np.cos(np.linspace(0.0, math.pi, son_fade_n, dtype=np.float32)))
+        audio[-son_fade_n:] *= cikis_egrisi
 
     son_max = float(np.max(np.abs(audio)))
     if son_max > 1e-6:
         audio = (audio / son_max) * tepe_norm
-    return audio.astype(np.float32)
+
+    kapanis_sessizligi = np.zeros(int(sample_rate * 0.120), dtype=np.float32)
+    audio = np.concatenate([audio, kapanis_sessizligi]).astype(np.float32)
+    return audio
 
 
 def referans_sesi_on_temizle(orijinal_wav_yolu: str | Path) -> str:
-    """
-    Referans sesi doğrular ve 24kHz olarak önbelleğe alır.
-    Dosya bulunamazsa sessizce erkek sesine DÜŞMEZ; açık FileNotFoundError fırlatır.
-    Önbellek anahtarı (yol + mtime + boyut) hash'i ile çakışmasız oluşturulur.
-    """
     orijinal_yol = Path(orijinal_wav_yolu)
     if not orijinal_yol.exists():
         alternatif = BASE_DIR / orijinal_yol.name
@@ -792,14 +1144,23 @@ def referans_sesi_on_temizle(orijinal_wav_yolu: str | Path) -> str:
         elif ozel_alternatif.exists():
             orijinal_yol = ozel_alternatif
         else:
-            raise FileNotFoundError(
-                f"Seçilen referans ses dosyası bulunamadı: '{orijinal_yol.name}'. "
-                "Lütfen '2. Referans Sesler' sekmesinden ses dosyasını kontrol edin."
-            )
+            # Eğer 8 yerleşik sesten biri diskte eksikse çökme yerine mevcut yerleşik sese (ref_erkek_1 / ref_kadin_1) zarif geçiş yap
+            isim_kucuk = orijinal_yol.name.lower()
+            yedek_ad = ANA_REF_KADIN if ("kadin" in isim_kucuk or "kiz" in isim_kucuk) else ANA_REF_ERKEK
+            yedek_yol = BASE_DIR / yedek_ad
+            if yedek_yol.exists():
+                print(f"   ℹ️ '{orijinal_yol.name}' bulunamadı, yerleşik yedek ses kullanılıyor: '{yedek_ad}'")
+                orijinal_yol = yedek_yol
+            else:
+                raise FileNotFoundError(
+                    f"Seçilen referans ses dosyası bulunamadı: '{orijinal_yol.name}'. "
+                    "Lütfen '2. Referans Sesler' sekmesinden ses dosyasını kontrol edin."
+                )
 
     orijinal_yol = orijinal_yol.resolve()
+    yerlesik_mi = yerlesik_ref_ses_mi(orijinal_yol)
     stat = orijinal_yol.stat()
-    kimlik_imzasi = f"{orijinal_yol}|{stat.st_mtime_ns}|{stat.st_size}|v4"
+    kimlik_imzasi = f"{orijinal_yol}|{stat.st_mtime_ns}|{stat.st_size}|v8|{int(yerlesik_mi)}"
     kisa_hash = hashlib.sha1(kimlik_imzasi.encode("utf-8")).hexdigest()[:12]
 
     REF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -818,6 +1179,7 @@ def referans_sesi_on_temizle(orijinal_wav_yolu: str | Path) -> str:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=True,
+            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
         )
         veri, sr = sf.read(str(gecici_wav), dtype="float32")
         if gecici_wav.exists():
@@ -834,6 +1196,7 @@ def referans_sesi_on_temizle(orijinal_wav_yolu: str | Path) -> str:
         sample_rate=hedef_sr,
         tek_kelime_mi=False,
         referans_on_temizlik_mi=True,
+        ozel_referans_mi=(not yerlesik_mi),
     )
     sf.write(str(hedef_cache_yol), temiz_veri, hedef_sr, subtype="PCM_16")
     return str(hedef_cache_yol)
@@ -846,21 +1209,21 @@ def sesi_diske_kaydet(
     hiz: float = 1.0,
     wav_formatini_zorla: bool = False,
 ) -> bool:
-    """
-    Sesi diske atomik olarak kaydeder.
-    MP3 istendiğinde FFmpeg yoksa WAV verisini sahte '.mp3' uzantısıyla KAYDETMEZ;
-    libsndfile MP3 desteğini dener veya açık hata fırlatır.
-    """
     cikti_str = str(cikti_yolu)
     hedef_dir = os.path.dirname(os.path.abspath(cikti_str))
     os.makedirs(hedef_dir, exist_ok=True)
 
     wav_istendi = wav_formatini_zorla or cikti_str.lower().endswith(".wav")
     ffmpeg_var = bool(shutil.which("ffmpeg"))
-    hiz_degisimi_var = abs(hiz - 1.0) > 0.02 and (0.75 <= hiz <= 1.25)
+    hiz_degisimi_var = (hiz < 0.88 or hiz > 1.03) and (0.75 <= hiz <= 1.25)
 
     benzersiz_ek = uuid.uuid4().hex[:8]
     gecici_wav = f"{cikti_str}.{benzersiz_ek}.tmp.wav"
+
+    if wav_istendi and not hiz_degisimi_var:
+        sf.write(gecici_wav, wav_np, sample_rate, subtype="PCM_16")
+        os.replace(gecici_wav, cikti_str)
+        return True
 
     if not ffmpeg_var and wav_istendi:
         sf.write(gecici_wav, wav_np, sample_rate, subtype="PCM_16")
@@ -868,7 +1231,6 @@ def sesi_diske_kaydet(
         return True
 
     if not ffmpeg_var and not wav_istendi:
-        # FFmpeg yoksa libsndfile doğrudan MP3 yazmayı dener; olmazsa sahte MP3 yazmaz!
         try:
             gecici_mp3 = f"{cikti_str}.{benzersiz_ek}.tmp.mp3"
             sf.write(gecici_mp3, wav_np, sample_rate, format="MP3")
@@ -885,8 +1247,8 @@ def sesi_diske_kaydet(
         filtre_zinciri = []
         if hiz_degisimi_var:
             filtre_zinciri.append(f"atempo={hiz:.2f}")
-        # MP3 kodlama ve atempo sonrası inter-sample peak kırpılmasını önleyen true-peak limiter
-        filtre_zinciri.append("alimiter=limit=0.891:attack=5:release=50:level=disabled")
+        # level=0 tüm FFmpeg sürümleriyle uyumludur (level=disabled bazı sürümlerde boolean hatası verir)
+        filtre_zinciri.append("alimiter=limit=0.891:attack=5:release=50:level=0")
 
         komut = ["ffmpeg", "-y", "-i", gecici_wav, "-af", ",".join(filtre_zinciri)]
         if wav_istendi:
@@ -894,9 +1256,16 @@ def sesi_diske_kaydet(
             komut += ["-ar", str(sample_rate), "-ac", "1", "-sample_fmt", "s16", gecici_hedef]
         else:
             gecici_hedef = f"{cikti_str}.{benzersiz_ek}.out.mp3"
-            komut += ["-ar", str(sample_rate), "-ac", "1", "-b:a", "192k", gecici_hedef]
+            komut += ["-ar", str(sample_rate), "-ac", "1", "-b:a", "192k", "-write_xing", "0", gecici_hedef]
 
-        res = subprocess.run(komut, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=60)
+        res = subprocess.run(
+            komut,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+        )
         if res.returncode == 0 and os.path.exists(gecici_hedef) and os.path.getsize(gecici_hedef) > 800:
             os.replace(gecici_hedef, cikti_str)
             if os.path.exists(gecici_wav):
@@ -921,16 +1290,10 @@ def sesi_diske_kaydet(
 # 6. SATIR SONU VE HAREKESİZ EDAT KORUMALI AKILLI BÖLÜCÜ & SES BİRLEŞTİRİCİ
 # ==============================================================================
 def uzun_metni_cumlelere_bol(arapca_paragraf: str, maks_kelime: int = 14) -> List[str]:
-    """
-    Uzun Arapça paragrafı satır sonlarını (\n) ve noktalama işaretlerini koruyarak böler.
-    Hem harekeli hem harekesiz bölünmez Arapça edatların (في، من، على...) satır sonunda
-    tek başına kalmasını engeller.
-    """
     ham_metin = str(arapca_paragraf or "").strip()
     if not ham_metin:
         return []
 
-    # Önce satır sonlarını (\n) koruyarak paragraflara ayır
     satir_bloklari = [re.sub(r"[ \t]+", " ", s.strip()) for s in ham_metin.splitlines() if s.strip()]
     ham_cumleler: List[str] = []
     for blok in satir_bloklari:
@@ -986,25 +1349,46 @@ def uzun_metni_cumlelere_bol(arapca_paragraf: str, maks_kelime: int = 14) -> Lis
 
 
 def _ses_dosyasini_guvenli_oku_np(dosya_yolu: str, hedef_sr: int = 24000) -> np.ndarray:
-    """WAV veya MP3 dosyasını okur; soundfile MP3 çözemezse FFmpeg ile 24kHz PCM'e çözer."""
-    try:
-        veri, sr = sf.read(dosya_yolu, dtype="float32")
-    except Exception:
-        if not shutil.which("ffmpeg"):
-            raise RuntimeError(f"Ses dosyası okunamadı: {dosya_yolu}")
+    dosya_str = str(dosya_yolu)
+    uzanti = Path(dosya_str).suffix.lower()
+
+    if uzanti == ".mp3" and shutil.which("ffmpeg"):
         REF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         gecici_wav = REF_CACHE_DIR / f"_decode_{uuid.uuid4().hex[:8]}.wav"
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", dosya_yolu, "-ar", str(hedef_sr), "-ac", "1", str(gecici_wav)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True,
-        )
-        veri, sr = sf.read(str(gecici_wav), dtype="float32")
         try:
-            gecici_wav.unlink()
-        except OSError:
-            pass
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", dosya_str, "-ar", str(hedef_sr), "-ac", "1", str(gecici_wav)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+            veri, sr = sf.read(str(gecici_wav), dtype="float32")
+        finally:
+            try:
+                if gecici_wav.exists():
+                    gecici_wav.unlink()
+            except OSError:
+                pass
+    else:
+        try:
+            veri, sr = sf.read(dosya_str, dtype="float32")
+        except Exception:
+            if not shutil.which("ffmpeg"):
+                raise RuntimeError(f"Ses dosyası okunamadı: {dosya_yolu}")
+            REF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            gecici_wav = REF_CACHE_DIR / f"_decode_{uuid.uuid4().hex[:8]}.wav"
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", dosya_str, "-ar", str(hedef_sr), "-ac", "1", str(gecici_wav)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+            )
+            veri, sr = sf.read(str(gecici_wav), dtype="float32")
+            try:
+                gecici_wav.unlink()
+            except OSError:
+                pass
 
     if veri.ndim > 1:
         veri = np.mean(veri, axis=-1)
@@ -1017,8 +1401,8 @@ def _ses_dosyasini_guvenli_oku_np(dosya_yolu: str, hedef_sr: int = 24000) -> np.
 def sesleri_studyo_kalitesinde_birlestir(
     girdi_dosyalari: List[str | Path],
     cikti_dosyasi: str | Path,
-    bosluk_ms: int = 220,
-    mikro_fade_ms: int = 10,
+    bosluk_ms: int = 260,
+    mikro_fade_ms: int = 25,
     birlestirilmis_seviye_dengele: bool = True,
 ) -> bool:
     if not girdi_dosyalari:
@@ -1039,20 +1423,23 @@ def sesleri_studyo_kalitesinde_birlestir(
             if veri.size == 0:
                 continue
 
-            # RMS tabanlı algısal ses yüksekliği (loudness) dengeleme + güvenli tepe sınırı
+            # Duygusal vurgu kontrastını ezmeden nazik seviye dengeleme (-3 dB ile +3.2 dB arası)
             if birlestirilmis_seviye_dengele and veri.size > 200:
                 rms = float(np.sqrt(np.mean(veri ** 2) + 1e-12))
-                hedef_rms = 0.16  # ~ -16 dBFS algısal konuşma yüksekliği
+                hedef_rms = 0.14
                 if rms > 1e-4:
-                    veri = veri * min(2.2, hedef_rms / rms)
+                    kazanc = max(0.70, min(1.45, hedef_rms / rms))
+                    veri = veri * kazanc
                 tepe = float(np.max(np.abs(veri)))
                 if tepe > 0.891:
                     veri = (veri / tepe) * 0.891
 
             fade_n = min(int(hedef_sr * (float(mikro_fade_ms) / 1000.0)), veri.size // 4)
             if fade_n > 0:
-                veri[:fade_n] *= np.linspace(0.0, 1.0, fade_n, dtype=np.float32)
-                veri[-fade_n:] *= np.linspace(1.0, 0.0, fade_n, dtype=np.float32)
+                giris_e = 0.5 * (1.0 - np.cos(np.linspace(0.0, math.pi, fade_n, dtype=np.float32)))
+                cikis_e = 0.5 * (1.0 + np.cos(np.linspace(0.0, math.pi, fade_n, dtype=np.float32)))
+                veri[:fade_n] *= giris_e
+                veri[-fade_n:] *= cikis_e
 
             parcalar.append(veri.astype(np.float32))
             if i < len(girdi_dosyalari) - 1 and sessizlik.size > 0:
@@ -1062,6 +1449,10 @@ def sesleri_studyo_kalitesinde_birlestir(
             return False
 
         birlesik_ses = np.concatenate(parcalar).astype(np.float32)
+        genel_tepe = float(np.max(np.abs(birlesik_ses)))
+        if genel_tepe > 0.891:
+            birlesik_ses = (birlesik_ses / genel_tepe) * 0.891
+
         sesi_diske_kaydet(birlesik_ses, cikti_yolu=str(cikti_dosyasi), sample_rate=hedef_sr, hiz=1.0)
         return os.path.exists(str(cikti_dosyasi)) and os.path.getsize(str(cikti_dosyasi)) > 1000
     except Exception as e:
@@ -1083,6 +1474,7 @@ try:
             hedef_tok: int,
             ilerleme_cb: Optional[Callable[[int, str], None]] = None,
             cancel_token: Optional[CancelToken] = None,
+            tekrar_kontrolu_aktif: bool = False,
         ):
             super().__init__()
             self.motor = motor
@@ -1090,12 +1482,21 @@ try:
             self.hedef_tok = max(20, hedef_tok)
             self.ilerleme_cb = ilerleme_cb
             self.cancel_token = cancel_token
+            self.tekrar_kontrolu_aktif = tekrar_kontrolu_aktif
+            self.tekrar_tespit_edildi = False
             self.son_yuzde = 10
 
         def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
             if self.motor.iptal_edildi_mi(self.cancel_token):
                 return True
             uretilen = int(input_ids.shape[-1]) - self.baslangic_len
+
+            if self.tekrar_kontrolu_aktif and uretilen >= 40 and (uretilen % 10 == 0):
+                son_tokenlar = input_ids[0, self.baslangic_len:].tolist()
+                if _token_tekrar_dongusu_var_mi(son_tokenlar):
+                    self.tekrar_tespit_edildi = True
+                    return True
+
             if self.ilerleme_cb and uretilen > 0 and (uretilen % 5 == 0):
                 yuzde = min(92, 15 + int((uretilen / float(self.hedef_tok)) * 77))
                 if yuzde > self.son_yuzde:
@@ -1120,7 +1521,7 @@ class MuallimunStudyoSesMotoru:
         log_callback: Optional[Callable[[str], None]] = None,
         zorunlu_kademe: Optional[str] = None,
     ):
-        self._sentez_kilidi = threading.Lock()
+        self._sentez_kilidi = threading.RLock()
         self.cuda_mevcut = torch.cuda.is_available()
         self.kullanici_cpu_zorladi = (zorunlu_kademe == "CPU_MODU")
         self.device = "cpu" if (not self.cuda_mevcut or self.kullanici_cpu_zorladi) else "cuda"
@@ -1141,22 +1542,29 @@ class MuallimunStudyoSesMotoru:
 
         self.aktif_kademe_kodu = "PRO_STUDYO_12GB_USTU"
         self.dusuk_vram_modu = False
-        self.max_token_ust_sinir = 1100
-        self.kelime_token_carpani = 55
-        self.bolme_esigi_kelime = 32
+        self.max_token_ust_sinir = 1150
+        self.kelime_token_carpani = 52
+        self.bolme_esigi_kelime = 34
         self.parca_maks_kelime = 18
 
         _dahili_torchaudio_koprusunu_kur()
+        _eski_gecici_onbellek_dosyalarini_temizle()
 
         self._log("=" * 68)
         self._log(f"🎛️  MUALLİMUN STÜDYO SES MOTORU BAŞLATILIYOR ({self.motor_tipi})")
         if self.device == "cuda":
             gpu_adi = torch.cuda.get_device_name(0)
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            bos_gb = None
+            try:
+                bos_byte, _ = torch.cuda.mem_get_info(0)
+                bos_gb = bos_byte / (1024 ** 3)
+            except Exception:
+                pass
             secilecek_kademe = (
                 zorunlu_kademe
                 if (zorunlu_kademe and zorunlu_kademe in DONANIM_PROFILLERI)
-                else vram_miktarina_gore_kademe_belirle(vram_gb, cuda_aktif=True)
+                else vram_miktarina_gore_kademe_belirle(vram_gb, cuda_aktif=True, bos_gb=bos_gb)
             )
             self.donanim_kademesini_uygula(secilecek_kademe, kullanici_zorunlu=(zorunlu_kademe is not None))
             self._log(f"🚀 GPU: {gpu_adi} ({vram_gb:.1f} GB VRAM)")
@@ -1198,43 +1606,47 @@ class MuallimunStudyoSesMotoru:
         return False
 
     def bosalt(self, sadece_pasif_modelleri: bool = False) -> None:
-        """
-        5.44 / 4.0 GB VRAM taşmasını önlemek için pasif kalan veya tüm modelleri
-        GPU belleğinden tamamen siler ve CUDA önbelleğini temizler.
-        """
-        if not sadece_pasif_modelleri or self.motor_tipi != "SPARK_ARABIC":
-            if self.spark_model is not None:
+        if not self._sentez_kilidi.acquire(timeout=3.0):
+            return
+        try:
+            if not sadece_pasif_modelleri or self.motor_tipi != "SPARK_ARABIC":
+                if self.spark_model is not None:
+                    try:
+                        self.spark_model.to("cpu")
+                    except Exception:
+                        pass
+                    self.spark_model = None
+                    self.processor = None
+                    self.llm_submodule = None
+                    self._audio_token_cache.clear()
+
+            if not sadece_pasif_modelleri or self.motor_tipi != "XTTS_STUDIO":
+                if self.xtts_model is not None:
+                    try:
+                        self.xtts_model.to("cpu")
+                    except Exception:
+                        pass
+                    self.xtts_model = None
+                    self.latent_onbellek.clear()
+
+            gc.collect()
+            if torch.cuda.is_available():
                 try:
-                    self.spark_model.to("cpu")
+                    torch.cuda.synchronize()
+                    torch.cuda.empty_cache()
+                    if hasattr(torch.cuda, "ipc_collect"):
+                        torch.cuda.ipc_collect()
                 except Exception:
                     pass
-                self.spark_model = None
-                self.processor = None
-                self.llm_submodule = None
-                self._audio_token_cache.clear()
-
-        if not sadece_pasif_modelleri or self.motor_tipi != "XTTS_STUDIO":
-            if self.xtts_model is not None:
-                try:
-                    self.xtts_model.to("cpu")
-                except Exception:
-                    pass
-                self.xtts_model = None
-                self.latent_onbellek.clear()
-
-        gc.collect()
-        if torch.cuda.is_available():
-            try:
-                torch.cuda.empty_cache()
-            except Exception:
-                pass
+        finally:
+            self._sentez_kilidi.release()
 
     def aktif_motoru_degistir(self, yeni_motor_tipi: str) -> None:
-        """Motor değiştirildiğinde eski modeli VRAM'den temizleyip yeni motor tipini ayarlar."""
         hedef = yeni_motor_tipi if yeni_motor_tipi in ("SPARK_ARABIC", "FAST_DIRECT_TTS", "XTTS_STUDIO") else "SPARK_ARABIC"
-        if hedef != self.motor_tipi:
-            self.motor_tipi = hedef
-            self.bosalt(sadece_pasif_modelleri=True)
+        with self._sentez_kilidi:
+            if hedef != self.motor_tipi:
+                self.motor_tipi = hedef
+                self.bosalt(sadece_pasif_modelleri=True)
 
     def _edge_tts_kontrol_et(self) -> None:
         try:
@@ -1246,34 +1658,33 @@ class MuallimunStudyoSesMotoru:
             )
 
     def _xtts_motorunu_yukle(self) -> bool:
-        if self.xtts_model is not None:
-            self._xtts_gpt_inference_yamasi_uygula()
-            return True
+        with self._sentez_kilidi:
+            if self.xtts_model is not None:
+                self._xtts_gpt_inference_yamasi_uygula()
+                return True
 
-        # Önce Spark-TTS GPU'daysa tamamen boşalt ki 4 GB VRAM taşmasın!
-        self.motor_tipi = "XTTS_STUDIO"
-        self.bosalt(sadece_pasif_modelleri=True)
+            self.motor_tipi = "XTTS_STUDIO"
+            self.bosalt(sadece_pasif_modelleri=True)
 
-        try:
-            from TTS.api import TTS
-            self._log("📥 Coqui XTTS v2 Stüdyo Modeli yükleniyor...")
-
-            # Yalnızca Coqui XTTS v2 yüklemesi sırasında weights_only=False izinli bağlamı kullan
-            orig_load = torch.load
             try:
-                torch.load = lambda *a, **kw: orig_load(*a, **{**kw, "weights_only": False})
-                tts_wrapper = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
-            finally:
-                torch.load = orig_load
+                from TTS.api import TTS
+                self._log("📥 Coqui XTTS v2 Stüdyo Modeli yükleniyor...")
 
-            self.xtts_model = tts_wrapper.synthesizer.tts_model
-            self._xtts_gpt_inference_yamasi_uygula()
-            self._log("✅ Coqui XTTS v2 Hazır!")
-            return True
-        except Exception as e:
-            self.son_hata_mesaji = f"Coqui XTTS v2 yüklenemedi: {e}"
-            self._log(f"⚠️ Coqui XTTS v2 yüklenemedi ({e})")
-            return False
+                orig_load = torch.load
+                try:
+                    torch.load = lambda *a, **kw: orig_load(*a, **{**kw, "weights_only": False})
+                    tts_wrapper = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
+                finally:
+                    torch.load = orig_load
+
+                self.xtts_model = tts_wrapper.synthesizer.tts_model
+                self._xtts_gpt_inference_yamasi_uygula()
+                self._log("✅ Coqui XTTS v2 Hazır!")
+                return True
+            except Exception as e:
+                self.son_hata_mesaji = f"Coqui XTTS v2 yüklenemedi: {e}"
+                self._log(f"⚠️ Coqui XTTS v2 yüklenemedi ({e})")
+                return False
 
     def _xtts_gpt_inference_yamasi_uygula(self) -> None:
         try:
@@ -1397,33 +1808,33 @@ class MuallimunStudyoSesMotoru:
             self._log(f"⚠️ XTTS uyumluluk yaması uyarısı: {e}")
 
     def _spark_motorunu_yukle(self) -> None:
-        if self.spark_model is not None:
-            try:
-                self.spark_model.to(self.device)
-            except Exception:
-                pass
-            return
+        with self._sentez_kilidi:
+            if self.spark_model is not None:
+                try:
+                    self.spark_model.to(self.device)
+                except Exception:
+                    pass
+                return
 
-        # Önce XTTS v2 bellekteyse tamamen boşalt ki 4 GB VRAM taşmasın!
-        self.motor_tipi = "SPARK_ARABIC"
-        self.bosalt(sadece_pasif_modelleri=True)
+            self.motor_tipi = "SPARK_ARABIC"
+            self.bosalt(sadece_pasif_modelleri=True)
 
-        from transformers import AutoProcessor, AutoModel
-        self._log(f"📥 '{SPARK_HF_MODEL_ID}' (24kHz BiCodec) modeli {self.device.upper()} belleğine yükleniyor...")
-        self.processor = AutoProcessor.from_pretrained(SPARK_HF_MODEL_ID, trust_remote_code=True)
-        self.spark_model = AutoModel.from_pretrained(
-            SPARK_HF_MODEL_ID, trust_remote_code=True
-        ).eval().to(self.device)
+            from transformers import AutoProcessor, AutoModel
+            self._log(f"📥 '{SPARK_HF_MODEL_ID}' (24kHz BiCodec) modeli {self.device.upper()} belleğine yükleniyor...")
+            self.processor = AutoProcessor.from_pretrained(SPARK_HF_MODEL_ID, trust_remote_code=True)
+            self.spark_model = AutoModel.from_pretrained(
+                SPARK_HF_MODEL_ID, trust_remote_code=True
+            ).eval().to(self.device)
 
-        if hasattr(self.processor, "link_model"):
-            self.processor.link_model(self.spark_model)
+            if hasattr(self.processor, "link_model"):
+                self.processor.link_model(self.spark_model)
 
-        self._spark_v5_uyumluluk_ve_onbellek_yamasi()
+            self._spark_v5_uyumluluk_ve_onbellek_yamasi()
 
-        if self.device == "cuda":
-            torch.cuda.empty_cache()
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
 
-        self._log(f"✅ 'IbrahimSalah/Arabic-TTS-Spark' Hazır! (EOS Kilitleri: {self.eos_token_ids})")
+            self._log(f"✅ 'IbrahimSalah/Arabic-TTS-Spark' Hazır! (EOS Kilitleri: {self.eos_token_ids})")
 
     def donanim_kademesini_uygula(self, kademe_kodu: str, kullanici_zorunlu: bool = False) -> Dict[str, Any]:
         if kademe_kodu == "CPU_MODU":
@@ -1521,7 +1932,6 @@ class MuallimunStudyoSesMotoru:
         self.eos_token_ids = sorted(list({int(x) for x in aday_eos if x is not None and int(x) >= 0}))
         self.pad_token_id = int(getattr(tok, "pad_token_id", None) or self.eos_token_ids[0])
 
-        # Yalnızca eksik olan yapılandırma anahtarlarını doldur (mevcut değerleri ezme!)
         eksik_varsayilanlar = {
             "num_hidden_layers": 24,
             "hidden_size": 896,
@@ -1617,11 +2027,33 @@ class MuallimunStudyoSesMotoru:
             return temiz_ref_yol, REF_METIN_1
 
         temiz_ref_yol = referans_sesi_on_temizle(ref_wav_yolu)
-        if ozel_ref_metin:
+        yerlesik_mi = yerlesik_ref_ses_mi(ref_wav_yolu)
+
+        if ozel_ref_metin is not None:
             ozel_referans_metni_kaydet(str(ref_wav_yolu), ozel_ref_metin)
             ozel_referans_metni_kaydet(temiz_ref_yol, ozel_ref_metin)
 
         ref_metin = referans_metni_getir(str(ref_wav_yolu), ozel_metin=ozel_ref_metin)
+        ref_metin = _referans_prompt_metni_hazirla(ref_metin, yerlesik_mi=yerlesik_mi)
+
+        if not yerlesik_mi and ref_metin:
+            if ref_metin.strip() in (REF_METIN_1.strip(), REF_METIN_2.strip()):
+                self._log("   ℹ️ Özel seste fabrika metni algılandı; saf ses klonlama moduna geçildi.")
+                ref_metin = ""
+            else:
+                try:
+                    bilgi_sf = sf.info(str(temiz_ref_yol))
+                    ref_sure_sn = float(bilgi_sf.frames) / float(max(1, bilgi_sf.samplerate))
+                    ref_kelime_sayisi = len(ref_metin.split())
+                    if ref_sure_sn > 0.5:
+                        kelime_sn_orani = ref_kelime_sayisi / ref_sure_sn
+                        if kelime_sn_orani > 4.2 or kelime_sn_orani < 0.7:
+                            self._log(
+                                f"   ℹ️ Özel referans ses süresi ({ref_sure_sn:.1f} sn) ile referans metin ({ref_kelime_sayisi} kelime) uyumsuz; saf akustik klonlama kullanılıyor."
+                            )
+                            ref_metin = ""
+                except Exception:
+                    pass
 
         if self.motor_tipi == "XTTS_STUDIO":
             if self.xtts_model is None:
@@ -1655,16 +2087,21 @@ class MuallimunStudyoSesMotoru:
         tek_kelime_mi: bool,
         dsp_ayar: Optional[Dict[str, Any]],
         ilerleme_callback: Optional[Callable[[int, str], None]] = None,
+        cancel_token: Optional[CancelToken] = None,
     ) -> np.ndarray:
+        if self.iptal_edildi_mi(cancel_token):
+            return np.array([], dtype=np.float32)
+
         self._edge_tts_kontrol_et()
         import edge_tts
 
         if ilerleme_callback:
             ilerleme_callback(30, "⚡ Hızlı Direkt Neural TTS (Çevrimiçi) sentezleniyor...")
 
-        ref_stem = Path(str(ref_wav_yolu or "ref_erkek_1")).stem.lower()
-        # Önbellek hash eki varsa (_a1b2c3d4e5f6) temizle ve tam eşleşme ara
+        ref_str = str(ref_wav_yolu or "ref_erkek_1")
+        ref_stem = Path(ref_str).stem.lower()
         temiz_stem = re.sub(r"_[0-9a-f]{12}$", "", ref_stem)
+
         if temiz_stem in DIREKT_TTS_SES_HARITASI:
             secilen_ayar = DIREKT_TTS_SES_HARITASI[temiz_stem]
         else:
@@ -1673,7 +2110,30 @@ class MuallimunStudyoSesMotoru:
                     secilen_ayar = k_deger
                     break
             else:
-                if "kadin" in temiz_stem or "kiz" in temiz_stem:
+                # Özel sesler için önce kayıtlı kategori/cinsiyet haritasına bak, yoksa dosya adına bak
+                kat_bilgi = (
+                    _OZEL_REF_KATEGORI_HARITASI.get(ref_str)
+                    or _OZEL_REF_KATEGORI_HARITASI.get(os.path.basename(ref_str).lower())
+                    or _OZEL_REF_KATEGORI_HARITASI.get(ref_stem)
+                    or _OZEL_REF_KATEGORI_HARITASI.get(temiz_stem)
+                )
+                if kat_bilgi:
+                    kat = kat_bilgi.get("kategori", "")
+                    cins = kat_bilgi.get("cinsiyet", "E")
+                    if kat == "cocuk_K":
+                        secilen_ayar = DIREKT_TTS_SES_HARITASI["ref_kiz_cocuk_1"]
+                    elif kat == "cocuk_E":
+                        secilen_ayar = DIREKT_TTS_SES_HARITASI["ref_erkek_cocuk_1"]
+                    elif cins == "K" or kat == "yetiskin_K":
+                        secilen_ayar = DIREKT_TTS_SES_HARITASI["ref_kadin_1"]
+                    else:
+                        secilen_ayar = DIREKT_TTS_SES_HARITASI["ref_erkek_1"]
+                elif "cocuk" in temiz_stem or "çocuk" in temiz_stem:
+                    if any(k in temiz_stem for k in ("kiz", "kız", "kadin", "kadın", "female", "irem")):
+                        secilen_ayar = DIREKT_TTS_SES_HARITASI["ref_kiz_cocuk_1"]
+                    else:
+                        secilen_ayar = DIREKT_TTS_SES_HARITASI["ref_erkek_cocuk_1"]
+                elif any(k in temiz_stem for k in ("kiz", "kız", "kadin", "kadın", "female", "irem")):
                     secilen_ayar = DIREKT_TTS_SES_HARITASI["ref_kadin_1"]
                 else:
                     secilen_ayar = DIREKT_TTS_SES_HARITASI["ref_erkek_1"]
@@ -1697,11 +2157,34 @@ class MuallimunStudyoSesMotoru:
             )
             await comm.save(str(gecici_mp3))
 
+        timeout_sn = max(30.0, min(120.0, len(akustik_metin) / 25.0))
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(asyncio.wait_for(_indir(), timeout=30.0))
+            loop.run_until_complete(asyncio.wait_for(_indir(), timeout=timeout_sn))
+        except Exception as e:
+            for p in (gecici_mp3, gecici_wav):
+                try:
+                    if p.exists():
+                        p.unlink()
+                except OSError:
+                    pass
+            if self.iptal_edildi_mi(cancel_token):
+                return np.array([], dtype=np.float32)
+            raise RuntimeError(
+                "Hızlı Direkt TTS çevrimiçi servisine ulaşılamadı. Lütfen internet bağlantınızı kontrol edin "
+                "veya çevrimdışı çalışan '⭐ Spark-TTS' motorunu seçin."
+            ) from e
         finally:
             loop.close()
+
+        if self.iptal_edildi_mi(cancel_token):
+            for p in (gecici_mp3, gecici_wav):
+                try:
+                    if p.exists():
+                        p.unlink()
+                except OSError:
+                    pass
+            return np.array([], dtype=np.float32)
 
         if ilerleme_callback:
             ilerleme_callback(75, "🎚️ 24kHz 5-Katmanlı Stüdyo DSP uygulanıyor...")
@@ -1723,6 +2206,122 @@ class MuallimunStudyoSesMotoru:
             dsp_ayar=dsp_ayar,
         )
 
+    def _spark_tek_deneme_calistir(
+        self,
+        akustik_metin: str,
+        temiz_ref_yol: str,
+        ref_metin: Optional[str],
+        min_tok: int,
+        max_tok: int,
+        baz_temp: float,
+        secilen_top_k: int,
+        secilen_top_p: float,
+        kelime_sayisi: int,
+        ozel_ses_mi: bool,
+        ilerleme_callback: Optional[Callable[[int, str], None]],
+        cancel_token: Optional[CancelToken],
+        repetition_penalty_degeri: Optional[float] = None,
+    ) -> Tuple[np.ndarray, int, bool]:
+        if hasattr(self.spark_model, "bicodec") and self.spark_model.bicodec is not None:
+            self.spark_model.bicodec.to(self.device)
+
+        if ref_metin and str(ref_metin).strip():
+            try:
+                inputs = self.processor(
+                    text=akustik_metin,
+                    prompt_speech_path=temiz_ref_yol,
+                    prompt_text=ref_metin,
+                    return_tensors="pt",
+                ).to(self.device)
+            except TypeError:
+                inputs = self.processor(
+                    text=akustik_metin,
+                    prompt_speech_path=temiz_ref_yol,
+                    return_tensors="pt",
+                ).to(self.device)
+        else:
+            inputs = self.processor(
+                text=akustik_metin,
+                prompt_speech_path=temiz_ref_yol,
+                return_tensors="pt",
+            ).to(self.device)
+
+        if self.dusuk_vram_modu and self.device == "cuda" and hasattr(self.spark_model, "bicodec"):
+            try:
+                self.spark_model.bicodec.to("cpu")
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+        global_tokens_prompt = inputs.pop("global_token_ids_prompt", None)
+        input_ids_len = int(inputs["input_ids"].shape[-1])
+
+        kriter_nesnesi = _StudyoDurdurmaVeIlerlemeKriteri(
+            motor=self,
+            baslangic_len=input_ids_len,
+            hedef_tok=min(max_tok, max(60, kelime_sayisi * 32)),
+            ilerleme_cb=ilerleme_callback,
+            cancel_token=cancel_token,
+            tekrar_kontrolu_aktif=ozel_ses_mi,
+        )
+        durdurma_kriteri = StoppingCriteriaList([kriter_nesnesi])
+
+        gen_kwargs = dict(
+            **inputs,
+            min_new_tokens=min_tok,
+            max_new_tokens=max_tok,
+            eos_token_id=self.eos_token_ids,
+            pad_token_id=self.pad_token_id,
+            do_sample=True,
+            temperature=baz_temp,
+            top_k=secilen_top_k,
+            top_p=secilen_top_p,
+            stopping_criteria=durdurma_kriteri,
+        )
+        if repetition_penalty_degeri is not None and repetition_penalty_degeri > 1.0:
+            gen_kwargs["repetition_penalty"] = float(repetition_penalty_degeri)
+
+        try:
+            output_ids = self.spark_model.generate(**gen_kwargs, use_cache=True)
+        except torch.cuda.OutOfMemoryError:
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
+            gen_kwargs["max_new_tokens"] = max(120, int(max_tok * 0.7))
+            output_ids = self.spark_model.generate(**gen_kwargs, use_cache=True)
+
+        if self.iptal_edildi_mi(cancel_token):
+            del inputs, output_ids
+            return np.array([], dtype=np.float32), 24000, False
+
+        if ilerleme_callback:
+            ilerleme_callback(93, "🔊 BiCodec 24kHz ses dalgası çözülüyor...")
+
+        if hasattr(self.spark_model, "bicodec") and self.spark_model.bicodec is not None:
+            self.spark_model.bicodec.to(self.device)
+
+        decoded = self.processor.decode(
+            generated_ids=output_ids,
+            global_token_ids_prompt=global_tokens_prompt,
+            input_ids_len=input_ids_len,
+        )
+
+        aday_wav = decoded.get("audio")
+        ham_np = np.array([], dtype=np.float32)
+        sr = 24000
+        if aday_wav is not None:
+            if isinstance(aday_wav, torch.Tensor):
+                aday_wav = aday_wav.detach().cpu().numpy()
+            ham_np = np.asarray(aday_wav, dtype=np.float32).flatten()
+            sr = int(decoded.get("sampling_rate", 24000))
+
+        del inputs, output_ids, decoded
+
+        bozuk_mu = kriter_nesnesi.tekrar_tespit_edildi
+        if ozel_ses_mi and not bozuk_mu and ham_np.size > 0:
+            bozuk_mu = _ses_cizirti_veya_bozuk_mu(ham_np, sample_rate=sr)
+
+        return ham_np, sr, bozuk_mu
+
     def _tek_parca_sentezle_np(
         self,
         akustik_metin: str,
@@ -1737,6 +2336,8 @@ class MuallimunStudyoSesMotoru:
         referans_ses_kullan: bool = True,
         ilerleme_callback: Optional[Callable[[int, str], None]] = None,
         cancel_token: Optional[CancelToken] = None,
+        top_p_override: Optional[float] = None,
+        top_k_override: Optional[int] = None,
     ) -> np.ndarray:
         if self.iptal_edildi_mi(cancel_token):
             return np.array([], dtype=np.float32)
@@ -1749,6 +2350,7 @@ class MuallimunStudyoSesMotoru:
                 tek_kelime_mi=tek_kelime_mi,
                 dsp_ayar=dsp_ayar,
                 ilerleme_callback=ilerleme_callback,
+                cancel_token=cancel_token,
             )
 
         if self.motor_tipi == "XTTS_STUDIO":
@@ -1769,18 +2371,26 @@ class MuallimunStudyoSesMotoru:
                 except Exception:
                     pass
 
+        yerlesik_mi = yerlesik_ref_ses_mi(temiz_ref_yol)
+        ozel_ses_mi = not yerlesik_mi
+
         kelime_sayisi = max(1, len(akustik_metin.split()))
         if tek_kelime_mi or kelime_sayisi == 1:
             min_tok = min_tokens_override if min_tokens_override is not None else 12
             max_tok = max_tokens_override if max_tokens_override is not None else 140
         else:
             min_tok = min_tokens_override if min_tokens_override is not None else min(32, max(14, kelime_sayisi * 6))
-            max_tok = (
-                max_tokens_override
-                if max_tokens_override is not None
-                else min(self.max_token_ust_sinir, max(160, kelime_sayisi * self.kelime_token_carpani))
-            )
+            if ozel_ses_mi:
+                max_tok = min(self.max_token_ust_sinir, max(150, kelime_sayisi * 42))
+            else:
+                max_tok = (
+                    max_tokens_override
+                    if max_tokens_override is not None
+                    else min(self.max_token_ust_sinir, max(160, kelime_sayisi * self.kelime_token_carpani))
+                )
         min_tok = min(min_tok, max(10, max_tok - 10))
+        secilen_top_k = int(top_k_override) if top_k_override is not None else 50
+        secilen_top_p = float(top_p_override) if top_p_override is not None else 0.95
 
         ham_np = np.array([], dtype=np.float32)
         sr = 24000
@@ -1788,93 +2398,60 @@ class MuallimunStudyoSesMotoru:
         with torch.inference_mode():
             if self.motor_tipi == "SPARK_ARABIC" and self.spark_model is not None:
                 self._active_ref_key = str(temiz_ref_yol)
-                baz_temp = max(0.50, min(0.78, float(temperature) if temperature >= 0.45 else 0.64))
+                baz_temp = max(0.50, min(0.76, float(temperature) if temperature >= 0.45 else 0.64))
 
                 if ilerleme_callback:
-                    ilerleme_callback(14, "🎛️ Referans ses kimliği çıkarılıyor...")
+                    ilerleme_callback(14, "🎛️ Referans ses kimliği ve tonlama aktarılıyor...")
 
-                if hasattr(self.spark_model, "bicodec") and self.spark_model.bicodec is not None:
-                    self.spark_model.bicodec.to(self.device)
+                ham_np, sr, bozuk_mu = self._spark_tek_deneme_calistir(
+                    akustik_metin=akustik_metin,
+                    temiz_ref_yol=temiz_ref_yol,
+                    ref_metin=ref_metin if ref_metin else None,
+                    min_tok=min_tok,
+                    max_tok=max_tok,
+                    baz_temp=baz_temp,
+                    secilen_top_k=secilen_top_k,
+                    secilen_top_p=secilen_top_p,
+                    kelime_sayisi=kelime_sayisi,
+                    ozel_ses_mi=ozel_ses_mi,
+                    ilerleme_callback=ilerleme_callback,
+                    cancel_token=cancel_token,
+                    repetition_penalty_degeri=None,
+                )
 
-                try:
-                    inputs = self.processor(
-                        text=akustik_metin,
-                        prompt_speech_path=temiz_ref_yol,
-                        prompt_text=ref_metin,
-                        return_tensors="pt",
-                    ).to(self.device)
-                except TypeError:
-                    inputs = self.processor(
-                        text=akustik_metin,
-                        prompt_speech_path=temiz_ref_yol,
-                        return_tensors="pt",
-                    ).to(self.device)
-
-                if self.dusuk_vram_modu and self.device == "cuda" and hasattr(self.spark_model, "bicodec"):
-                    try:
-                        self.spark_model.bicodec.to("cpu")
-                        torch.cuda.empty_cache()
-                    except Exception:
-                        pass
-
-                global_tokens_prompt = inputs.pop("global_token_ids_prompt", None)
-                input_ids_len = int(inputs["input_ids"].shape[-1])
-
-                durdurma_kriteri = StoppingCriteriaList([
-                    _StudyoDurdurmaVeIlerlemeKriteri(
-                        motor=self,
-                        baslangic_len=input_ids_len,
-                        hedef_tok=min(max_tok, max(60, kelime_sayisi * 32)),
-                        ilerleme_cb=ilerleme_callback,
-                        cancel_token=cancel_token,
+                # 2. DENEME (Best-of-2 Korumalı): Özel seste cızırtı/osilasyon algılanırsa
+                # Saf Akustik Klonlama + hafif repetition_penalty (1.06) ile 2. üretimi yap ve daha doğal olanı seç!
+                if ozel_ses_mi and bozuk_mu and not self.iptal_edildi_mi(cancel_token):
+                    self._log(
+                        "   🛡️ Özel referans seste semantik hizalama cızırtısı algılandı; Saf Akustik Klonlama moduna geçiliyor..."
                     )
-                ])
+                    if ilerleme_callback:
+                        ilerleme_callback(22, "🛡️ Özel ses için Saf Akustik Klonlama uygulanıyor...")
 
-                gen_kwargs = dict(
-                    **inputs,
-                    min_new_tokens=min_tok,
-                    max_new_tokens=max_tok,
-                    eos_token_id=self.eos_token_ids,
-                    pad_token_id=self.pad_token_id,
-                    do_sample=True,
-                    temperature=baz_temp,
-                    top_k=50,
-                    top_p=0.95,
-                    stopping_criteria=durdurma_kriteri,
-                )
+                    ham_np_2, sr_2, bozuk_mu_2 = self._spark_tek_deneme_calistir(
+                        akustik_metin=akustik_metin,
+                        temiz_ref_yol=temiz_ref_yol,
+                        ref_metin=None,
+                        min_tok=min_tok,
+                        max_tok=max(110, int(max_tok * 0.88)),
+                        baz_temp=max(0.54, min(0.65, baz_temp)),
+                        secilen_top_k=min(38, secilen_top_k),
+                        secilen_top_p=min(0.89, secilen_top_p),
+                        kelime_sayisi=kelime_sayisi,
+                        ozel_ses_mi=True,
+                        ilerleme_callback=ilerleme_callback,
+                        cancel_token=cancel_token,
+                        repetition_penalty_degeri=1.06,
+                    )
 
-                try:
-                    output_ids = self.spark_model.generate(**gen_kwargs, use_cache=True)
-                except torch.cuda.OutOfMemoryError:
-                    if self.device == "cuda":
-                        torch.cuda.empty_cache()
-                    gen_kwargs["max_new_tokens"] = max(120, int(max_tok * 0.7))
-                    output_ids = self.spark_model.generate(**gen_kwargs, use_cache=True)
-
-                if self.iptal_edildi_mi(cancel_token):
-                    del inputs, output_ids
-                    return np.array([], dtype=np.float32)
-
-                if ilerleme_callback:
-                    ilerleme_callback(93, "🔊 BiCodec 24kHz ses dalgası çözülüyor...")
-
-                if hasattr(self.spark_model, "bicodec") and self.spark_model.bicodec is not None:
-                    self.spark_model.bicodec.to(self.device)
-
-                decoded = self.processor.decode(
-                    generated_ids=output_ids,
-                    global_token_ids_prompt=global_tokens_prompt,
-                    input_ids_len=input_ids_len,
-                )
-
-                aday_wav = decoded.get("audio")
-                if aday_wav is not None:
-                    if isinstance(aday_wav, torch.Tensor):
-                        aday_wav = aday_wav.detach().cpu().numpy()
-                    ham_np = np.asarray(aday_wav, dtype=np.float32).flatten()
-                    sr = int(decoded.get("sampling_rate", 24000))
-
-                del inputs, output_ids, decoded
+                    if ham_np_2.size > 0:
+                        if not bozuk_mu_2:
+                            ham_np, sr = ham_np_2, sr_2
+                        else:
+                            puan_1 = _ses_dogallik_puani_hesapla(ham_np, sample_rate=sr)
+                            puan_2 = _ses_dogallik_puani_hesapla(ham_np_2, sample_rate=sr_2)
+                            if puan_2 >= puan_1 or ham_np.size < 1200:
+                                ham_np, sr = ham_np_2, sr_2
 
             elif self.xtts_model is not None:
                 if ilerleme_callback:
@@ -1896,8 +2473,8 @@ class MuallimunStudyoSesMotoru:
                     speed=hiz,
                     repetition_penalty=3.5,
                     length_penalty=1.05,
-                    top_k=45,
-                    top_p=0.85,
+                    top_k=secilen_top_k,
+                    top_p=secilen_top_p,
                     enable_text_splitting=True,
                 )
                 ham_np = np.asarray(out["wav"], dtype=np.float32).flatten()
@@ -1914,7 +2491,7 @@ class MuallimunStudyoSesMotoru:
             sr = 24000
 
         if ilerleme_callback:
-            ilerleme_callback(97, "🎚️ 5-Katmanlı Stüdyo DSP Mastering uygulanıyor...")
+            ilerleme_callback(97, "🎚️ Doğal Sönümlenmeli Stüdyo DSP Mastering uygulanıyor...")
 
         return studyo_dsp_mastering(
             ham_np,
@@ -1942,6 +2519,8 @@ class MuallimunStudyoSesMotoru:
         referans_ses_kullan: bool = True,
         ilerleme_callback: Optional[Callable[[int, str], None]] = None,
         cancel_token: Optional[CancelToken] = None,
+        top_p_override: Optional[float] = None,
+        top_k_override: Optional[int] = None,
     ) -> bool:
         with self._sentez_kilidi:
             try:
@@ -1967,6 +2546,7 @@ class MuallimunStudyoSesMotoru:
                         tek_kelime_mi=tek_kelime_mi,
                         dsp_ayar=dsp_ayar,
                         ilerleme_callback=ilerleme_callback,
+                        cancel_token=cancel_token,
                     )
                     if islenmis_wav.size < 1000:
                         self.son_hata_mesaji = "Hızlı Direkt TTS ses verisi üretemedi."
@@ -1989,7 +2569,7 @@ class MuallimunStudyoSesMotoru:
                 )
 
                 if onceden_hazirlanmis_akustik_metin and onceden_hazirlanmis_akustik_metin.strip():
-                    akustik_metin = onceden_hazirlanmis_akustik_metin.strip()
+                    akustik_metin = hareke_siralamasini_normallestir(onceden_hazirlanmis_akustik_metin.strip())
                     akustik_metin = re.sub(r"[،؛,:;]+$", ".", akustik_metin)
                     if not re.search(r"[.؟!…]$", akustik_metin):
                         akustik_metin += "."
@@ -2009,7 +2589,7 @@ class MuallimunStudyoSesMotoru:
                             f"⚡ [{self.aktif_kademe_kodu}] Uzun paragraf {len(alt_cumleler)} doğal cümleye bölündü..."
                         )
                         parca_dizileri: List[np.ndarray] = []
-                        nefes_boslugu = np.zeros(int(24000 * 0.22), dtype=np.float32)
+                        nefes_boslugu = np.zeros(int(24000 * 0.24), dtype=np.float32)
 
                         for idx, alt_c in enumerate(alt_cumleler, start=1):
                             if self.iptal_edildi_mi(cancel_token):
@@ -2031,6 +2611,8 @@ class MuallimunStudyoSesMotoru:
                                     genel_yuzde = int(((b_idx - 1 + (p_yuzde / 100.0)) / float(b_top)) * 95)
                                     ilerleme_callback(genel_yuzde, f"[Bölüm {b_idx}/{b_top}] {p_mesaj}")
 
+                            # Bölünmüş alt cümlelerde min/max token override None verilir ki
+                            # her parça kendi kelime uzunluğuna göre doğal token bütçesi alsın
                             parca_np = self._tek_parca_sentezle_np(
                                 akustik_metin=alt_akustik,
                                 temiz_ref_yol=temiz_ref_yol,
@@ -2038,12 +2620,14 @@ class MuallimunStudyoSesMotoru:
                                 hiz=hiz,
                                 temperature=temperature,
                                 tek_kelime_mi=False,
-                                min_tokens_override=min_tokens_override,
-                                max_tokens_override=max_tokens_override,
+                                min_tokens_override=None,
+                                max_tokens_override=None,
                                 dsp_ayar=dsp_ayar,
                                 referans_ses_kullan=referans_ses_kullan,
                                 ilerleme_callback=_parca_progress,
                                 cancel_token=cancel_token,
+                                top_p_override=top_p_override,
+                                top_k_override=top_k_override,
                             )
                             if parca_np.size < 1000:
                                 self.son_hata_mesaji = f"{idx}. bölüm üretilemedi veya durduruldu."
@@ -2077,6 +2661,8 @@ class MuallimunStudyoSesMotoru:
                     referans_ses_kullan=referans_ses_kullan,
                     ilerleme_callback=ilerleme_callback,
                     cancel_token=cancel_token,
+                    top_p_override=top_p_override,
+                    top_k_override=top_k_override,
                 )
 
                 if self.iptal_edildi_mi(cancel_token):
@@ -2100,7 +2686,7 @@ class MuallimunStudyoSesMotoru:
                 if ilerleme_callback:
                     ilerleme_callback(100, "✅ Ses üretimi tamamlandı!")
 
-                return os.path.exists(str(cikti_yolu)) and os.path.getsize(str(cikti_yolu)) > 800
+                return os.path.exists(str(cikti_yolu)) and os.path.getsize(str(cikti_yolu)) > 1000
 
             except Exception as e:
                 self.son_hata_mesaji = str(e)

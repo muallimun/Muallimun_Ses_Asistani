@@ -45,6 +45,7 @@ from core.studyo_motoru import (
     gpu_vram_durumu_getir,
     referans_sesi_on_temizle,
 )
+from ui.rehber_ve_guncelleyici import profesyonel_arapca_font_olustur
 
 
 def _python_yorumlayici_bul() -> str:
@@ -343,26 +344,46 @@ class TekilKurulumWorker(QThread):
                 )
                 return
 
-            if self.gorev_tipi == "model_indir":
-                repo = self.hf_repo_id or SPARK_HF_MODEL_ID
-                self.ilerleme_sinyali.emit(25, "8 Referans ses 24kHz DSP ön-temizliğinden geçiriliyor...")
+            if self.gorev_tipi in ("model_indir", "ref_temizle"):
+                repo = str(self.hf_repo_id or "").strip()
+                self.ilerleme_sinyali.emit(25, "Referans sesler 24kHz DSP ön-temizliğinden geçiriliyor...")
+                temizlenen_sayisi = 0
+                eksik_yerlesik_sesler: List[str] = []
+
                 for ses_kaydi in self.config_manager.voice_pool:
                     if self._durdur_istegi:
                         raise RuntimeError("İşlem kullanıcı tarafından durduruldu.")
                     yol = self.config_manager.resolve_voice_path(ses_kaydi["id"])
-                    if yol.exists():
+                    if yol.exists() and yol.stat().st_size > 1000:
                         referans_sesi_on_temizle(yol)
+                        temizlenen_sayisi += 1
                         self.log_sinyali.emit(f"   🎵 Ön-temizlendi: {yol.name}")
+                    elif ses_kaydi.get("yerlesik", False):
+                        eksik_yerlesik_sesler.append(ses_kaydi.get("dosya", ses_kaydi["id"]))
 
-                if "/" in repo and not repo.startswith("tts_models"):
+                if eksik_yerlesik_sesler:
+                    self.log_sinyali.emit(
+                        f"   ℹ️ Not: {len(eksik_yerlesik_sesler)} yerleşik ses dosyası dizinde bulunamadı ({', '.join(eksik_yerlesik_sesler[:4])})."
+                    )
+
+                # Yalnızca açıkça bir HuggingFace repo kimliği verilmişse model indirme/doğrulama yap!
+                if repo and "/" in repo and not repo.startswith("tts_models"):
                     self.ilerleme_sinyali.emit(60, f"HuggingFace modeli indiriliyor / doğrulanıyor: {repo}")
                     self.log_sinyali.emit(f"📥 Model dosyaları kontrol ediliyor: {repo}")
                     from huggingface_hub import snapshot_download
                     yerel_yol = snapshot_download(repo_id=repo)
                     self.log_sinyali.emit(f"✅ Model çevrimdışı kullanıma hazır: {yerel_yol}")
-
-                self.ilerleme_sinyali.emit(100, "Model ve referans sesler hazır!")
-                self.tamamlandi_sinyali.emit(True, f"'{repo}' modeli ve referans ses önbelleği doğrulandı!")
+                    self.ilerleme_sinyali.emit(100, "Model ve referans sesler hazır!")
+                    self.tamamlandi_sinyali.emit(
+                        True,
+                        f"'{repo}' modeli ve {temizlenen_sayisi} referans ses önbelleği başarıyla doğrulandı!",
+                    )
+                else:
+                    self.ilerleme_sinyali.emit(100, "Referans ses ön-temizliği tamamlandı!")
+                    self.tamamlandi_sinyali.emit(
+                        True,
+                        f"Toplam {temizlenen_sayisi} referans ses dosyası 24kHz standardında ön-temizlikten geçirilip önbelleğe alındı!",
+                    )
                 return
 
         except Exception as e:
@@ -551,7 +572,6 @@ class SetupWizardDialog(QDialog):
             k_v.setContentsMargins(12, 8, 12, 8)
             k_v.setSpacing(4)
 
-            # 1. Satır: Model Seçim Radyo Butonu + Kalite Rozeti + Doğrula/Kur Butonu
             ust_satir = QHBoxLayout()
             ust_satir.setSpacing(8)
 
@@ -578,7 +598,6 @@ class SetupWizardDialog(QDialog):
             ust_satir.addWidget(btn_model_kur)
             k_v.addLayout(ust_satir)
 
-            # 2. Satır: Kullanım Amacı ve Donanım Gereksinimi
             orta_satir = QHBoxLayout()
             orta_satir.setContentsMargins(24, 0, 0, 0)
             orta_satir.setSpacing(8)
@@ -595,7 +614,6 @@ class SetupWizardDialog(QDialog):
             orta_satir.addWidget(lbl_req)
             k_v.addLayout(orta_satir)
 
-            # 3. Satır: Gerçekçi Teknik Açıklama
             lbl_detay = QLabel(f"ℹ️ {m['aciklama']}")
             lbl_detay.setWordWrap(True)
             lbl_detay.setStyleSheet("font-size: 8.5pt; margin-left: 24px;")
@@ -656,13 +674,14 @@ class SetupWizardDialog(QDialog):
         ust.addWidget(QLabel("Stüdyo Referans Ses Havuzu ve 24kHz Ön-Temizlik Durumu:"))
         ust.addStretch()
         btn_on_temizle = QPushButton("✨ Tüm Referans Sesleri 24kHz Ön-Temizlikten Geçir")
+        btn_on_temizle.setToolTip("Model indirmeden yalnızca mevcut referans ses dosyalarını 24kHz standardında ön-temizlikten geçirir.")
         btn_on_temizle.setStyleSheet("background-color: #059669;")
-        btn_on_temizle.clicked.connect(lambda: self._gorev_baslat("model_indir", hf_repo_id=""))
+        btn_on_temizle.clicked.connect(lambda: self._gorev_baslat("ref_temizle", hf_repo_id=None))
         ust.addWidget(btn_on_temizle)
         layout.addLayout(ust)
 
         self.tablo_ref = QTableWidget(0, 5)
-        self.tablo_ref.verticalHeader().setDefaultSectionSize(36)
+        self.tablo_ref.verticalHeader().setDefaultSectionSize(38)
         self.tablo_ref.setHorizontalHeaderLabels([
             "Ses Adı / Rol", "Dosya Adı", "Durum", "Referans Seste Okunan Arapça Metin (Prompt Text)", "Dinle"
         ])
@@ -758,14 +777,15 @@ class SetupWizardDialog(QDialog):
 
         havuz = self.config_manager.voice_pool
         self.tablo_ref.setRowCount(len(havuz))
-        arapca_font = QFont("Traditional Arabic", 13)
+        arapca_font = profesyonel_arapca_font_olustur(15)
 
         for row_idx, ses in enumerate(havuz):
             yol = self.config_manager.resolve_voice_path(ses["id"])
             var_mi = yol.exists() and yol.stat().st_size > 1000
+            dosya_adi_str = str(ses.get("dosya") or ses.get("dosya_adi") or yol.name)
 
             self.tablo_ref.setItem(row_idx, 0, QTableWidgetItem(ses.get("ad", ses["id"])))
-            self.tablo_ref.setItem(row_idx, 1, QTableWidgetItem(ses.get("dosya_adi", yol.name)))
+            self.tablo_ref.setItem(row_idx, 1, QTableWidgetItem(dosya_adi_str))
 
             durum_item = QTableWidgetItem("✅ Hazır" if var_mi else "❌ Dosya Eksik")
             durum_item.setForeground(QColor("#10b981") if var_mi else QColor("#ef4444"))
@@ -773,6 +793,7 @@ class SetupWizardDialog(QDialog):
 
             metin_item = QTableWidgetItem(ses.get("ref_metin", ""))
             metin_item.setFont(arapca_font)
+            metin_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             metin_item.setToolTip(ses.get("ref_metin", ""))
             self.tablo_ref.setItem(row_idx, 3, metin_item)
 
@@ -845,15 +866,17 @@ class SetupWizardDialog(QDialog):
         if self.ana_pencere and hasattr(self.ana_pencere, "ses_dosyasini_cal"):
             self.ana_pencere.ses_dosyasini_cal(dosya_yolu)
         elif sys.platform == "win32" and os.path.exists(dosya_yolu):
-            import winsound
-            winsound.PlaySound(dosya_yolu, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            try:
+                import winsound
+                winsound.PlaySound(dosya_yolu, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            except Exception:
+                pass
 
     def _kaydet_ve_kapat(self) -> None:
         secili_btn = self.model_radio_grup.checkedButton()
         if secili_btn:
             secili_kod = secili_btn.property("model_kodu")
             self.config_manager.user_settings["aktif_motor_tercihi"] = secili_kod
-            # Kullanıcı bilinçli olarak başka motor seçtiyse oturum boyunca koru
             self.config_manager.user_settings["acilis_varsayilan_spark_koru"] = (secili_kod == "SPARK_ARABIC")
         self.config_manager.save_user_settings()
         self.accept()
@@ -861,5 +884,7 @@ class SetupWizardDialog(QDialog):
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.worker and self.worker.isRunning():
             self.worker.durdur()
-            self.worker.wait(1500)
+            if not self.worker.wait(4000):
+                self.worker.terminate()
+                self.worker.wait(500)
         super().closeEvent(event)

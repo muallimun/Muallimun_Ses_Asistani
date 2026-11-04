@@ -1,624 +1,597 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MUALLİMUN AI SES STÜDYOSU PRO - MERKEZİ YAPILANDIRMA, PRESET VE SES HAVUZU YÖNETİCİSİ
+MUALLİMUN AI SES STÜDYOSU PRO - MERKEZİ YAPILANDIRMA VE FABRİKA AYARLARI YÖNETİCİSİ
+Dosya: core/config_manager.py
 Özellikler:
-  1. Spark-TTS ('SPARK_ARABIC') Ana Stüdyo Motoru Varsayılan Garantisi
-  2. Atomik JSON Kaydı (.tmp -> fsync -> os.replace) ve Otomatik Yedek (.bak) Kurtarma
-  3. Özel Referans Seslerde Benzersiz Kimlik (Çakışmasız UUID) ve Gerçek 24kHz PCM_16 WAV Dönüşümü
-  4. Aydınlık/Karanlık Tema, İlk Açılış Rehber Turu ve GitHub Sürüm Kontrolü Ayarları
+  1. 8 Yerleşik Stüdyo Referans Sesi ile Kullanıcı Özel Referans Seslerinin İzole Yönetimi
+  2. Özel Referans Seslerde Boş Metin Girildiğinde Yanlışlıkla REF_METIN_1 Atanmasını Engelleyen Koruma
+  3. Özel Referans Sesleri 24kHz İç Boşluk Sıkıştırmalı (Silence-Compacted) WAV Formatında Kaydetme
+  4. 5 İçerik Modu (Preset) ve 18+ DSP Mastering Parametresinin Atomik ve Kalıcı Yönetimi
 """
 
 import os
+import sys
 import json
 import uuid
 import shutil
-import hashlib
-import subprocess
+import copy
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-import numpy as np
-import soundfile as sf
-from scipy import signal
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 from core.studyo_motoru import (
     REF_METIN_1,
     REF_METIN_2,
     ozel_referans_metni_kaydet,
+    ozel_referans_kategori_kaydet,
+    hareke_siralamasini_normallestir,
 )
-
-CORE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CORE_DIR.parent if CORE_DIR.name == "core" else CORE_DIR
-SCHEMA_VERSION = 2
-
-# ==============================================================================
-# 1. DEĞİŞTİRİLEMEZ FABRİKA PRESETLERİ (5 EĞİTİM MODU)
-# ==============================================================================
-FABRIKA_PRESETLERI: Dict[str, Dict[str, Any]] = {
-    "tek_kelime": {
-        "kod": "tek_kelime",
-        "baslik": "1. Tek Kelime (Sözlük & Görsel Kelime)",
-        "aciklama": "Sözlük maddeleri ve görsel kartlar için net, vakıflı ve kısa soluklu stüdyo okuması.",
-        "hiz": 0.90,
-        "temperature": 0.58,
-        "top_k": 40,
-        "top_p": 0.90,
-        "min_tokens": 15,
-        "max_tokens": 140,
-        "kelime_turu": "isim",
-        "tek_kelime_mi": True,
-        "hikmetli_durak_ekle": False,
-        "cift_uretim_erkek_kadin": True,
-        "dinamik_tonlama": False,
-        "varsayilan_format": "wav",
-        "birlesik_bosluk_ms": 300,
-        "dsp": {
-            "hp_freq": 85.0,
-            "lp_freq": 11200.0,
-            "gate_esigi": 0.032,
-            "aktif_esik_katsayi": 0.025,
-            "bas_pay_ms": 40.0,
-            "son_pay_ms": 140.0,
-            "drive": 1.12,
-            "fade_ms": 8.0,
-            "tepe_normalizasyon": 0.891,
-        },
-    },
-    "cumle": {
-        "kod": "cumle",
-        "baslik": "2. Cümle (Eğitim & Gramer Cümleleri)",
-        "aciklama": "Ders kitabı etkinlikleri ve gramer örnekleri için dengeli, anlaşılır muallim tonu.",
-        "hiz": 0.92,
-        "temperature": 0.64,
-        "top_k": 50,
-        "top_p": 0.94,
-        "min_tokens": 25,
-        "max_tokens": 550,
-        "kelime_turu": "genel",
-        "tek_kelime_mi": False,
-        "hikmetli_durak_ekle": False,
-        "cift_uretim_erkek_kadin": True,
-        "dinamik_tonlama": True,
-        "varsayilan_format": "mp3",
-        "birlesik_bosluk_ms": 350,
-        "dsp": {
-            "hp_freq": 85.0,
-            "lp_freq": 11200.0,
-            "gate_esigi": 0.028,
-            "aktif_esik_katsayi": 0.024,
-            "bas_pay_ms": 55.0,
-            "son_pay_ms": 170.0,
-            "drive": 1.12,
-            "fade_ms": 10.0,
-            "tepe_normalizasyon": 0.891,
-        },
-    },
-    "atasozu": {
-        "kod": "atasozu",
-        "baslik": "3. Atasözü / Hikmetli Söz",
-        "aciklama": "Vecizeler, hikmetli sözler ve beyitler için ağırbaşlı, tefekkür duraklı okuma.",
-        "hiz": 0.89,
-        "temperature": 0.62,
-        "top_k": 45,
-        "top_p": 0.92,
-        "min_tokens": 30,
-        "max_tokens": 600,
-        "kelime_turu": "genel",
-        "tek_kelime_mi": False,
-        "hikmetli_durak_ekle": True,
-        "cift_uretim_erkek_kadin": True,
-        "dinamik_tonlama": True,
-        "varsayilan_format": "wav",
-        "birlesik_bosluk_ms": 420,
-        "dsp": {
-            "hp_freq": 80.0,
-            "lp_freq": 11200.0,
-            "gate_esigi": 0.026,
-            "aktif_esik_katsayi": 0.024,
-            "bas_pay_ms": 60.0,
-            "son_pay_ms": 190.0,
-            "drive": 1.14,
-            "fade_ms": 12.0,
-            "tepe_normalizasyon": 0.891,
-        },
-    },
-    "diyalog": {
-        "kod": "diyalog",
-        "baslik": "4. Diyalog (Çoklu Karakter Konuşması)",
-        "aciklama": "Karşılıklı konuşma metinleri için soru ve ünlem vurgularına duyarlı canlı diyalog modu.",
-        "hiz": 0.94,
-        "temperature": 0.66,
-        "top_k": 50,
-        "top_p": 0.95,
-        "min_tokens": 25,
-        "max_tokens": 650,
-        "kelime_turu": "genel",
-        "tek_kelime_mi": False,
-        "hikmetli_durak_ekle": False,
-        "cift_uretim_erkek_kadin": False,
-        "dinamik_tonlama": True,
-        "varsayilan_format": "mp3",
-        "birlesik_bosluk_ms": 450,
-        "dsp": {
-            "hp_freq": 85.0,
-            "lp_freq": 11200.0,
-            "gate_esigi": 0.028,
-            "aktif_esik_katsayi": 0.024,
-            "bas_pay_ms": 50.0,
-            "son_pay_ms": 160.0,
-            "drive": 1.12,
-            "fade_ms": 10.0,
-            "tepe_normalizasyon": 0.891,
-        },
-    },
-    "uzun_metin": {
-        "kod": "uzun_metin",
-        "baslik": "5. Uzun Metin / Okuma Parçası",
-        "aciklama": "Paragrafları doğal nefes aralıklarıyla cümlelere bölüp tek parça olarak birleştiren öyküleme modu.",
-        "hiz": 0.92,
-        "temperature": 0.62,
-        "top_k": 45,
-        "top_p": 0.92,
-        "min_tokens": 30,
-        "max_tokens": 750,
-        "kelime_turu": "genel",
-        "tek_kelime_mi": False,
-        "hikmetli_durak_ekle": False,
-        "cift_uretim_erkek_kadin": False,
-        "dinamik_tonlama": True,
-        "varsayilan_format": "mp3",
-        "birlesik_bosluk_ms": 350,
-        "dsp": {
-            "hp_freq": 85.0,
-            "lp_freq": 11200.0,
-            "gate_esigi": 0.028,
-            "aktif_esik_katsayi": 0.024,
-            "bas_pay_ms": 55.0,
-            "son_pay_ms": 175.0,
-            "drive": 1.12,
-            "fade_ms": 10.0,
-            "tepe_normalizasyon": 0.891,
-        },
-    },
-}
-
-# ==============================================================================
-# 2. VARSAYILAN 8 STÜDYO REFERANS SES HAVUZU
-# ==============================================================================
-VARSAYILAN_SES_HAVUZU: List[Dict[str, Any]] = [
-    {
-        "id": "ref_erkek_1",
-        "ad": "Yetişkin Erkek 1 (Ana Muallim)",
-        "dosya_adi": "ref_erkek_1.wav",
-        "cinsiyet": "E",
-        "kategori": "yetiskin_E",
-        "ref_metin": REF_METIN_1,
-        "ozel_mi": False,
-    },
-    {
-        "id": "ref_erkek_2",
-        "ad": "Yetişkin Erkek 2 (Anlatıcı / Diyalog)",
-        "dosya_adi": "ref_erkek_2.wav",
-        "cinsiyet": "E",
-        "kategori": "yetiskin_E",
-        "ref_metin": REF_METIN_2,
-        "ozel_mi": False,
-    },
-    {
-        "id": "ref_kadin_1",
-        "ad": "Yetişkin Kadın 1 (Ana Muallime)",
-        "dosya_adi": "ref_kadin_1.wav",
-        "cinsiyet": "K",
-        "kategori": "yetiskin_K",
-        "ref_metin": REF_METIN_1,
-        "ozel_mi": False,
-    },
-    {
-        "id": "ref_kadin_2",
-        "ad": "Yetişkin Kadın 2 (Anlatıcı / Diyalog)",
-        "dosya_adi": "ref_kadin_2.wav",
-        "cinsiyet": "K",
-        "kategori": "yetiskin_K",
-        "ref_metin": REF_METIN_2,
-        "ozel_mi": False,
-    },
-    {
-        "id": "ref_erkek_cocuk_1",
-        "ad": "Erkek Çocuk / Genç 1",
-        "dosya_adi": "ref_erkek_cocuk_1.wav",
-        "cinsiyet": "E",
-        "kategori": "cocuk_E",
-        "ref_metin": REF_METIN_1,
-        "ozel_mi": False,
-    },
-    {
-        "id": "ref_erkek_cocuk_2",
-        "ad": "Erkek Çocuk / Genç 2",
-        "dosya_adi": "ref_erkek_cocuk_2.wav",
-        "cinsiyet": "E",
-        "kategori": "cocuk_E",
-        "ref_metin": REF_METIN_2,
-        "ozel_mi": False,
-    },
-    {
-        "id": "ref_kiz_cocuk_1",
-        "ad": "Kız Çocuk / Genç 1",
-        "dosya_adi": "ref_kiz_cocuk_1.wav",
-        "cinsiyet": "K",
-        "kategori": "cocuk_K",
-        "ref_metin": REF_METIN_1,
-        "ozel_mi": False,
-    },
-    {
-        "id": "ref_kiz_cocuk_2",
-        "ad": "Kız Çocuk / Genç 2",
-        "dosya_adi": "ref_kiz_cocuk_2.wav",
-        "cinsiyet": "K",
-        "kategori": "cocuk_K",
-        "ref_metin": REF_METIN_2,
-        "ozel_mi": False,
-    },
-]
-
-GECERLI_MOTOR_KODLARI = {"SPARK_ARABIC", "FAST_DIRECT_TTS", "XTTS_STUDIO"}
-
-
-def _atomik_json_yaz(hedef_yol: Path, veri: Any) -> None:
-    """
-    JSON dosyasını önce geçici dosyaya yazar, diske flush/fsync eder,
-    mevcut dosyanın '.bak' yedeğini alır ve atomik olarak hedef dosyayla değiştirir.
-    """
-    hedef_yol.parent.mkdir(parents=True, exist_ok=True)
-    gecici_yol = hedef_yol.with_suffix(hedef_yol.suffix + f".{os.getpid()}.tmp")
-    yedek_yol = hedef_yol.with_suffix(hedef_yol.suffix + ".bak")
-
-    icerik = json.dumps(veri, ensure_ascii=False, indent=2)
-    with open(gecici_yol, "w", encoding="utf-8") as f:
-        f.write(icerik)
-        f.flush()
-        os.fsync(f.fileno())
-
-    if hedef_yol.exists() and hedef_yol.stat().st_size > 10:
-        try:
-            shutil.copy2(str(hedef_yol), str(yedek_yol))
-        except Exception:
-            pass
-
-    os.replace(str(gecici_yol), str(hedef_yol))
-
-
-def _guvenli_json_oku(hedef_yol: Path, varsayilan_veri: Any) -> Any:
-    """
-    JSON dosyasını okur. Bozuksa '.bak' yedeğinden kurtarmayı dener;
-    bozuk dosyayı silmek yerine '.corrupt' olarak saklar.
-    """
-    yedek_yol = hedef_yol.with_suffix(hedef_yol.suffix + ".bak")
-    if hedef_yol.exists():
-        try:
-            with open(hedef_yol, "r", encoding="utf-8-sig") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"⚠️ Yapılandırma dosyası bozuk ({hedef_yol.name}): {e}")
-            try:
-                bozuk_kopya = hedef_yol.with_suffix(hedef_yol.suffix + ".corrupt")
-                shutil.copy2(str(hedef_yol), str(bozuk_kopya))
-            except Exception:
-                pass
-            if yedek_yol.exists():
-                try:
-                    with open(yedek_yol, "r", encoding="utf-8-sig") as fb:
-                        kurtarilan = json.load(fb)
-                    print(f"✅ Yedek dosyadan ({yedek_yol.name}) başarıyla kurtarıldı!")
-                    _atomik_json_yaz(hedef_yol, kurtarilan)
-                    return kurtarilan
-                except Exception:
-                    pass
-    return json.loads(json.dumps(varsayilan_veri))
 
 
 class ConfigManager:
-    def __init__(self, base_dir: Optional[Path] = None):
-        self.base_dir = Path(base_dir).resolve() if base_dir else PROJECT_ROOT
-        self.config_dir = self.base_dir / "config"
-        self.custom_voices_dir = self.base_dir / "referans_sesler_ozel"
+    """
+    Stüdyo fabrika ayarlarını, kullanıcı ince ayarlarını (DSP, Hız, Temperature, Token sınırları)
+    ve 8+N Referans Ses Havuzunu yöneten merkezi yapılandırma sınıfı.
+    """
+
+    YERLESIK_8_SES_IDLERI = {
+        "ref_erkek_1",
+        "ref_erkek_2",
+        "ref_kadin_1",
+        "ref_kadin_2",
+        "ref_erkek_cocuk_1",
+        "ref_erkek_cocuk_2",
+        "ref_kiz_cocuk_1",
+        "ref_kiz_cocuk_2",
+    }
+
+    FACTORY_VOICE_POOL: List[Dict[str, Any]] = [
+        {
+            "id": "ref_erkek_1",
+            "ad": "Yetişkin Erkek 1 (Ana Muallim)",
+            "dosya": "ref_erkek_1.wav",
+            "cinsiyet": "E",
+            "kategori": "yetiskin_E",
+            "ref_metin": REF_METIN_1,
+            "yerlesik": True,
+        },
+        {
+            "id": "ref_erkek_2",
+            "ad": "Yetişkin Erkek 2 (Anlatıcı / Diyalog)",
+            "dosya": "ref_erkek_2.wav",
+            "cinsiyet": "E",
+            "kategori": "yetiskin_E",
+            "ref_metin": REF_METIN_2,
+            "yerlesik": True,
+        },
+        {
+            "id": "ref_kadin_1",
+            "ad": "Yetişkin Kadın 1 (Ana Muallime)",
+            "dosya": "ref_kadin_1.wav",
+            "cinsiyet": "K",
+            "kategori": "yetiskin_K",
+            "ref_metin": REF_METIN_1,
+            "yerlesik": True,
+        },
+        {
+            "id": "ref_kadin_2",
+            "ad": "Yetişkin Kadın 2 (Anlatıcı / Diyalog)",
+            "dosya": "ref_kadin_2.wav",
+            "cinsiyet": "K",
+            "kategori": "yetiskin_K",
+            "ref_metin": REF_METIN_2,
+            "yerlesik": True,
+        },
+        {
+            "id": "ref_erkek_cocuk_1",
+            "ad": "Erkek Çocuk / Genç 1",
+            "dosya": "ref_erkek_cocuk_1.wav",
+            "cinsiyet": "E",
+            "kategori": "cocuk_E",
+            "ref_metin": REF_METIN_1,
+            "yerlesik": True,
+        },
+        {
+            "id": "ref_erkek_cocuk_2",
+            "ad": "Erkek Çocuk / Genç 2",
+            "dosya": "ref_erkek_cocuk_2.wav",
+            "cinsiyet": "E",
+            "kategori": "cocuk_E",
+            "ref_metin": REF_METIN_2,
+            "yerlesik": True,
+        },
+        {
+            "id": "ref_kiz_cocuk_1",
+            "ad": "Kız Çocuk / Genç 1",
+            "dosya": "ref_kiz_cocuk_1.wav",
+            "cinsiyet": "K",
+            "kategori": "cocuk_K",
+            "ref_metin": REF_METIN_1,
+            "yerlesik": True,
+        },
+        {
+            "id": "ref_kiz_cocuk_2",
+            "ad": "Kız Çocuk / Genç 2",
+            "dosya": "ref_kiz_cocuk_2.wav",
+            "cinsiyet": "K",
+            "kategori": "cocuk_K",
+            "ref_metin": REF_METIN_2,
+            "yerlesik": True,
+        },
+    ]
+
+    FACTORY_PRESETS: Dict[str, Dict[str, Any]] = {
+        "tek_kelime": {
+            "kod": "tek_kelime",
+            "baslik": "1. Tek Kelime (Sözlük & Görsel Kelime)",
+            "aciklama": "Sözlük kelimeleri için net vakıf, sıfır dip gürültüsü ve hızlı sönümlenme.",
+            "hiz": 0.90,
+            "temperature": 0.58,
+            "top_k": 40,
+            "top_p": 0.90,
+            "min_tokens": 12,
+            "max_tokens": 140,
+            "tek_kelime_mi": True,
+            "kelime_turu": "isim",
+            "hikmetli_durak_ekle": False,
+            "varsayilan_format": "wav",
+            "cift_uretim_erkek_kadin": True,
+            "dinamik_tonlama": False,
+            "birlesik_bosluk_ms": 300,
+            "dsp": {
+                "hp_freq": 80.0,
+                "lp_freq": 11200.0,
+                "gate_esigi": 0.024,
+                "aktif_esik_katsayi": 0.020,
+                "bas_pay_ms": 45.0,
+                "son_pay_ms": 220.0,
+                "drive": 1.06,
+                "fade_ms": 10.0,
+                "tepe_normalizasyon": 0.891,
+            },
+        },
+        "cumle": {
+            "kod": "cumle",
+            "baslik": "2. Cümle (Eğitim & Gramer Cümleleri)",
+            "aciklama": "Soru, ünlem ve haber cümleleri için doğal tonlamalı ve vakıflı stüdyo okuması.",
+            "hiz": 0.92,
+            "temperature": 0.64,
+            "top_k": 50,
+            "top_p": 0.94,
+            "min_tokens": 25,
+            "max_tokens": 550,
+            "tek_kelime_mi": False,
+            "kelime_turu": "genel",
+            "hikmetli_durak_ekle": False,
+            "varsayilan_format": "mp3",
+            "cift_uretim_erkek_kadin": True,
+            "dinamik_tonlama": True,
+            "birlesik_bosluk_ms": 350,
+            "dsp": {
+                "hp_freq": 80.0,
+                "lp_freq": 11200.0,
+                "gate_esigi": 0.020,
+                "aktif_esik_katsayi": 0.018,
+                "bas_pay_ms": 55.0,
+                "son_pay_ms": 250.0,
+                "drive": 1.06,
+                "fade_ms": 12.0,
+                "tepe_normalizasyon": 0.891,
+            },
+        },
+        "atasozu": {
+            "kod": "atasozu",
+            "baslik": "3. Atasözü / Hikmetli Söz",
+            "aciklama": "Vecize ve atasözleri için ağırbaşlı, tefekkür duraklı ve vurgulu okuma.",
+            "hiz": 0.89,
+            "temperature": 0.62,
+            "top_k": 45,
+            "top_p": 0.92,
+            "min_tokens": 30,
+            "max_tokens": 600,
+            "tek_kelime_mi": False,
+            "kelime_turu": "genel",
+            "hikmetli_durak_ekle": True,
+            "varsayilan_format": "wav",
+            "cift_uretim_erkek_kadin": True,
+            "dinamik_tonlama": True,
+            "birlesik_bosluk_ms": 420,
+            "dsp": {
+                "hp_freq": 75.0,
+                "lp_freq": 11200.0,
+                "gate_esigi": 0.020,
+                "aktif_esik_katsayi": 0.018,
+                "bas_pay_ms": 60.0,
+                "son_pay_ms": 260.0,
+                "drive": 1.07,
+                "fade_ms": 12.0,
+                "tepe_normalizasyon": 0.891,
+            },
+        },
+        "diyalog": {
+            "kod": "diyalog",
+            "baslik": "4. Diyalog (Çoklu Karakter Konuşması)",
+            "aciklama": "8 referans sesten otomatik rol atamalı, konuşmacı bazlı ve birleştirilmiş diyalog üretimi.",
+            "hiz": 0.94,
+            "temperature": 0.66,
+            "top_k": 50,
+            "top_p": 0.95,
+            "min_tokens": 25,
+            "max_tokens": 650,
+            "tek_kelime_mi": False,
+            "kelime_turu": "genel",
+            "hikmetli_durak_ekle": False,
+            "varsayilan_format": "mp3",
+            "cift_uretim_erkek_kadin": False,
+            "dinamik_tonlama": True,
+            "birlesik_bosluk_ms": 450,
+            "dsp": {
+                "hp_freq": 80.0,
+                "lp_freq": 11200.0,
+                "gate_esigi": 0.020,
+                "aktif_esik_katsayi": 0.018,
+                "bas_pay_ms": 55.0,
+                "son_pay_ms": 240.0,
+                "drive": 1.06,
+                "fade_ms": 12.0,
+                "tepe_normalizasyon": 0.891,
+            },
+        },
+        "uzun_metin": {
+            "kod": "uzun_metin",
+            "baslik": "5. Uzun Metin / Okuma Parçası",
+            "aciklama": "Paragrafları harf-i cer ve edatları bölmeden cümlelere ayırır, seslendirir ve birleştirir.",
+            "hiz": 0.92,
+            "temperature": 0.62,
+            "top_k": 45,
+            "top_p": 0.92,
+            "min_tokens": 30,
+            "max_tokens": 750,
+            "tek_kelime_mi": False,
+            "kelime_turu": "genel",
+            "hikmetli_durak_ekle": False,
+            "varsayilan_format": "mp3",
+            "cift_uretim_erkek_kadin": False,
+            "dinamik_tonlama": True,
+            "birlesik_bosluk_ms": 350,
+            "dsp": {
+                "hp_freq": 80.0,
+                "lp_freq": 11200.0,
+                "gate_esigi": 0.020,
+                "aktif_esik_katsayi": 0.018,
+                "bas_pay_ms": 55.0,
+                "son_pay_ms": 250.0,
+                "drive": 1.06,
+                "fade_ms": 12.0,
+                "tepe_normalizasyon": 0.891,
+            },
+        },
+    }
+
+    def __init__(self, project_root: Optional[Path] = None):
+        self.project_root = project_root or PROJECT_ROOT
+        self.config_dir = self.project_root / "config"
+        self.custom_voices_dir = self.project_root / "referans_sesler_ozel"
+        self.user_settings_path = self.config_dir / "user_settings.json"
+        self.factory_presets_path = self.config_dir / "factory_presets.json"
 
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.custom_voices_dir.mkdir(parents=True, exist_ok=True)
 
-        self.factory_presets_path = self.config_dir / "factory_presets.json"
-        self.user_settings_path = self.config_dir / "user_settings.json"
-        self.voice_pool_path = self.config_dir / "voice_pool.json"
+        # Fabrika preset dosyasını (config/factory_presets.json) kodla tek kaynak olarak senkronize tut
+        try:
+            self._save_json(self.factory_presets_path, self.FACTORY_PRESETS)
+        except Exception:
+            pass
 
-        self.factory_presets: Dict[str, Dict[str, Any]] = json.loads(json.dumps(FABRIKA_PRESETLERI))
-        self.user_settings: Dict[str, Any] = {}
-        self.voice_pool: List[Dict[str, Any]] = []
+        self.user_settings: Dict[str, Any] = self._load_user_settings()
+        self.voice_pool: List[Dict[str, Any]] = self._build_voice_pool()
+        self._senkronize_ozel_ses_metinleri()
 
-        self._yukle_veya_olustur()
-
-    def _varsayilan_kullanici_ayarlari(self) -> Dict[str, Any]:
+    def _default_user_settings(self) -> Dict[str, Any]:
         return {
-            "schema_version": SCHEMA_VERSION,
-            "aktif_motor_tercihi": "SPARK_ARABIC",
-            "acilis_varsayilan_spark_koru": True,
-            "zorunlu_donanim_kademesi": "OTOMATIK",
+            "ilk_kurulum_tamamlandi": False,
+            "ilk_acilis_turu_gosterildi": False,
             "uzman_mod_aktif": False,
             "tema_modu": "koyu",
-            "auto_qa_aktif": True,
-            "otomatik_oynat_toplu_bitis": False,
-            "ilk_acilis_turu_gosterildi": False,
             "otomatik_guncelleme_kontrolu": True,
             "github_repo": "muallimun/Muallimun_Ses_Asistani",
-            "aktif_preset": "cumle",
-            "aktif_erkek_ref": "ref_erkek_1",
-            "aktif_kadin_ref": "ref_kadin_1",
-            "varsayilan_cikti_klasoru": "cikti_sesler",
-            "kullanici_presetleri": {},
+            "aktif_motor_tercihi": "SPARK_ARABIC",
+            "zorunlu_donanim_kademesi": "OTOMATIK",
+            "varsayilan_cikti_klasoru": str(self.project_root / "cikti_sesler"),
+            "varsayilan_erkek_ses": "ref_erkek_1",
+            "varsayilan_kadin_ses": "ref_kadin_1",
+            "otomatik_oynat_tekli": True,
+            "otomatik_oynat_toplu_bitis": False,
+            "presets": copy.deepcopy(self.FACTORY_PRESETS),
+            "custom_voices": [],
+            "voice_text_overrides": {},
         }
 
-    def _yukle_veya_olustur(self) -> None:
-        # 1. Fabrika presetlerini yalnızca dosya yoksa oluştur (Salt-okunur kurulum dostu)
-        if not self.factory_presets_path.exists():
-            try:
-                _atomik_json_yaz(self.factory_presets_path, FABRIKA_PRESETLERI)
-            except Exception:
-                pass
+    def _load_user_settings(self) -> Dict[str, Any]:
+        defaults = self._default_user_settings()
+        if not self.user_settings_path.exists():
+            self._save_json(self.user_settings_path, defaults)
+            return defaults
 
-        # 2. Kullanıcı ayarlarını yükle ve şema göçünü (migration) uygula
-        varsayilan = self._varsayilan_kullanici_ayarlari()
-        okunan = _guvenli_json_oku(self.user_settings_path, varsayilan)
-        if not isinstance(okunan, dict):
-            okunan = dict(varsayilan)
-
-        # Eksik anahtarları tamamla
-        for k, v in varsayilan.items():
-            if k not in okunan:
-                okunan[k] = v
-
-        # Eski GEMINI_API anahtarlarını temizle ve Spark-TTS varsayılanını koru
-        okunan.pop("gemini_api_key", None)
-        if okunan.get("aktif_motor_tercihi") not in GECERLI_MOTOR_KODLARI:
-            okunan["aktif_motor_tercihi"] = "SPARK_ARABIC"
-        if okunan.get("acilis_varsayilan_spark_koru", True):
-            okunan["aktif_motor_tercihi"] = "SPARK_ARABIC"
-
-        # Başka bilgisayardan kalan geçersiz mutlak çıktı yolunu taşınabilir göreli yola çevir
-        kayitli_cikti = str(okunan.get("varsayilan_cikti_klasoru", "cikti_sesler")).strip()
-        if kayitli_cikti:
-            aday_yol = Path(kayitli_cikti)
-            if aday_yol.is_absolute() and not aday_yol.exists():
-                okunan["varsayilan_cikti_klasoru"] = "cikti_sesler"
-            elif "Muallimun.Net" in kayitli_cikti and not Path(kayitli_cikti).exists():
-                okunan["varsayilan_cikti_klasoru"] = "cikti_sesler"
-
-        okunan["schema_version"] = SCHEMA_VERSION
-        self.user_settings = okunan
-        self.save_user_settings()
-
-        # 3. Ses havuzunu yükle ve 8 fabrika sesinin varlığını garanti et
-        okunan_havuz = _guvenli_json_oku(self.voice_pool_path, VARSAYILAN_SES_HAVUZU)
-        if not isinstance(okunan_havuz, list) or not okunan_havuz:
-            okunan_havuz = json.loads(json.dumps(VARSAYILAN_SES_HAVUZU))
-
-        mevcut_idler = {str(s.get("id")) for s in okunan_havuz if isinstance(s, dict)}
-        for vs in VARSAYILAN_SES_HAVUZU:
-            if vs["id"] not in mevcut_idler:
-                okunan_havuz.insert(0, dict(vs))
-
-        self.voice_pool = okunan_havuz
-        for ses in self.voice_pool:
-            if ses.get("ref_metin"):
-                ozel_referans_metni_kaydet(ses.get("dosya_adi", ses["id"]), ses["ref_metin"])
-        self.save_voice_pool()
-
-    def get_default_output_dir(self) -> Path:
-        """Taşınabilir ve güvenli varsayılan çıktı kök klasörünü döndürür."""
-        ayar_str = str(self.user_settings.get("varsayilan_cikti_klasoru", "cikti_sesler")).strip()
-        if not ayar_str or ayar_str == "cikti_sesler":
-            hedef = self.base_dir / "cikti_sesler"
-        else:
-            aday = Path(ayar_str)
-            hedef = aday if aday.is_absolute() else (self.base_dir / aday)
         try:
-            hedef.mkdir(parents=True, exist_ok=True)
-            return hedef.resolve()
-        except Exception:
-            yedek = self.base_dir / "cikti_sesler"
-            yedek.mkdir(parents=True, exist_ok=True)
-            return yedek.resolve()
-
-    def get_preset(self, mod_kodu: str) -> Dict[str, Any]:
-        kod = mod_kodu if mod_kodu in self.factory_presets else "cumle"
-        fabrika = json.loads(json.dumps(self.factory_presets[kod]))
-        kullanici_ozel = self.user_settings.get("kullanici_presetleri", {}).get(kod, {})
-        if isinstance(kullanici_ozel, dict):
-            for k, v in kullanici_ozel.items():
-                if k == "dsp" and isinstance(v, dict):
-                    fabrika.setdefault("dsp", {}).update(v)
+            with open(self.user_settings_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            for k, v in defaults.items():
+                if k not in loaded:
+                    loaded[k] = v
+            for p_key, p_val in self.FACTORY_PRESETS.items():
+                if p_key not in loaded.get("presets", {}):
+                    loaded["presets"][p_key] = copy.deepcopy(p_val)
                 else:
-                    fabrika[k] = v
-        return fabrika
+                    for sub_k, sub_v in p_val.items():
+                        if sub_k not in loaded["presets"][p_key]:
+                            loaded["presets"][p_key][sub_k] = copy.deepcopy(sub_v)
+                    for dsp_k, dsp_v in p_val["dsp"].items():
+                        if dsp_k not in loaded["presets"][p_key]["dsp"]:
+                            loaded["presets"][p_key]["dsp"][dsp_k] = dsp_v
+            return loaded
+        except Exception:
+            return defaults
 
-    def save_user_preset(self, mod_kodu: str, yeni_ayarlar: Dict[str, Any]) -> None:
-        if "kullanici_presetleri" not in self.user_settings or not isinstance(
-            self.user_settings["kullanici_presetleri"], dict
-        ):
-            self.user_settings["kullanici_presetleri"] = {}
-        self.user_settings["kullanici_presetleri"][mod_kodu] = yeni_ayarlar
-        self.save_user_settings()
-
-    def reset_preset_to_factory(self, mod_kodu: str) -> Dict[str, Any]:
-        kullanici_presetleri = self.user_settings.get("kullanici_presetleri", {})
-        if isinstance(kullanici_presetleri, dict) and mod_kodu in kullanici_presetleri:
-            del kullanici_presetleri[mod_kodu]
-            self.save_user_settings()
-        return self.get_preset(mod_kodu)
-
-    def reset_all_to_factory(self) -> None:
-        self.user_settings["kullanici_presetleri"] = {}
-        self.user_settings["aktif_motor_tercihi"] = "SPARK_ARABIC"
-        self.user_settings["zorunlu_donanim_kademesi"] = "OTOMATIK"
-        self.save_user_settings()
+    def _save_json(self, path: Path, data: Dict[str, Any]) -> None:
+        """Veri kaybını ve JSON bozulmasını önleyen atomik (tmp -> fsync -> replace) kayıt."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        gecici_yol = path.with_suffix(path.suffix + f".{uuid.uuid4().hex[:6]}.tmp")
+        try:
+            with open(gecici_yol, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(str(gecici_yol), str(path))
+        except Exception:
+            if gecici_yol.exists():
+                try:
+                    gecici_yol.unlink()
+                except OSError:
+                    pass
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
 
     def save_user_settings(self) -> None:
-        try:
-            _atomik_json_yaz(self.user_settings_path, self.user_settings)
-        except Exception as e:
-            print(f"⚠️ Kullanıcı ayarları kaydedilemedi: {e}")
+        self._save_json(self.user_settings_path, self.user_settings)
+        self.voice_pool = self._build_voice_pool()
+        self._senkronize_ozel_ses_metinleri()
 
-    def save_voice_pool(self) -> None:
-        try:
-            _atomik_json_yaz(self.voice_pool_path, self.voice_pool)
-        except Exception as e:
-            print(f"⚠️ Ses havuzu kaydedilemedi: {e}")
+    def _build_voice_pool(self) -> List[Dict[str, Any]]:
+        pool = copy.deepcopy(self.FACTORY_VOICE_POOL)
+        overrides = self.user_settings.get("voice_text_overrides", {})
+        for v in pool:
+            if v["id"] in overrides and str(overrides[v["id"]]).strip():
+                v["ref_metin"] = str(overrides[v["id"]]).strip()
 
-    def get_voice_by_id(self, voice_id: str) -> Optional[Dict[str, Any]]:
-        hedef = str(voice_id or "").strip()
-        for ses in self.voice_pool:
-            if ses.get("id") == hedef or ses.get("dosya_adi") == hedef:
-                return ses
-        return None
+        for custom in self.user_settings.get("custom_voices", []):
+            c_copy = copy.deepcopy(custom)
+            cid = c_copy.get("id", "")
+            if cid in overrides:
+                c_copy["ref_metin"] = str(overrides[cid]).strip()
+            else:
+                c_copy["ref_metin"] = str(c_copy.get("ref_metin", "")).strip()
+
+            pool.append(c_copy)
+        return pool
+
+    def _senkronize_ozel_ses_metinleri(self) -> None:
+        """
+        Tüm ses havuzundaki referans metinleri ve özel seslerin cinsiyet/kategori
+        bilgilerini ses motoru önbelleğiyle senkronize eder.
+        """
+        for v in self.voice_pool:
+            vid = str(v.get("id", "")).strip()
+            dosya_adi = str(v.get("dosya", "")).strip()
+            metin = str(v.get("ref_metin", "")).strip()
+            cinsiyet = str(v.get("cinsiyet", "E")).strip().upper()
+            kategori = str(v.get("kategori", f"yetiskin_{cinsiyet}")).strip()
+
+            if dosya_adi:
+                tam_yol = self.resolve_voice_path(vid)
+                # Metin boşaltılmışsa ('') da çağrılır ki eski önbellek kaydı silinsin
+                ozel_referans_metni_kaydet(vid, metin)
+                ozel_referans_metni_kaydet(dosya_adi, metin)
+                ozel_referans_metni_kaydet(str(tam_yol), metin)
+
+                ozel_referans_kategori_kaydet(vid, cinsiyet, kategori)
+                ozel_referans_kategori_kaydet(dosya_adi, cinsiyet, kategori)
+                ozel_referans_kategori_kaydet(str(tam_yol), cinsiyet, kategori)
+
+    def get_preset(self, preset_code: str) -> Dict[str, Any]:
+        presets = self.user_settings.get("presets", {})
+        if preset_code in presets:
+            return copy.deepcopy(presets[preset_code])
+        return copy.deepcopy(self.FACTORY_PRESETS["cumle"])
+
+    def save_user_preset(self, preset_code: str, updated_preset: Dict[str, Any]) -> None:
+        if "presets" not in self.user_settings:
+            self.user_settings["presets"] = copy.deepcopy(self.FACTORY_PRESETS)
+        self.user_settings["presets"][preset_code] = copy.deepcopy(updated_preset)
+        self.save_user_settings()
+
+    def reset_preset_to_factory(self, preset_code: str) -> Dict[str, Any]:
+        if preset_code in self.FACTORY_PRESETS:
+            self.user_settings["presets"][preset_code] = copy.deepcopy(self.FACTORY_PRESETS[preset_code])
+            self.save_user_settings()
+            return copy.deepcopy(self.FACTORY_PRESETS[preset_code])
+        return copy.deepcopy(self.FACTORY_PRESETS["cumle"])
+
+    def reset_all_to_factory(self) -> None:
+        self.user_settings["presets"] = copy.deepcopy(self.FACTORY_PRESETS)
+        self.save_user_settings()
 
     def resolve_voice_path(self, voice_id_or_filename: str) -> Path:
-        """
-        Referans sesin fiziksel yolunu yalnızca proje içi güvenli dizinlerde arar.
-        """
-        aranan = str(voice_id_or_filename or "ref_erkek_1").strip()
-        ses_kaydi = self.get_voice_by_id(aranan)
-        dosya_adi = ses_kaydi.get("dosya_adi", aranan) if ses_kaydi else aranan
-        if not dosya_adi.lower().endswith(".wav"):
-            dosya_adi_wav = f"{dosya_adi}.wav"
-        else:
-            dosya_adi_wav = dosya_adi
+        temiz_girdi = str(voice_id_or_filename or "").strip()
+        if not temiz_girdi:
+            return self.project_root / "ref_erkek_1.wav"
 
-        adaylar = [
-            self.base_dir / dosya_adi,
-            self.base_dir / dosya_adi_wav,
-            self.custom_voices_dir / dosya_adi,
-            self.custom_voices_dir / dosya_adi_wav,
-            self.base_dir / "referans_sesler" / dosya_adi_wav,
-        ]
-        if Path(aranan).is_absolute() and Path(aranan).exists():
-            return Path(aranan).resolve()
+        for v in self.voice_pool:
+            if v["id"] == temiz_girdi or v["dosya"] == temiz_girdi:
+                dosya = os.path.basename(str(v["dosya"]))
+                if v.get("yerlesik", False):
+                    return self.project_root / dosya
+                ozel_yol = self.custom_voices_dir / dosya
+                if ozel_yol.exists():
+                    return ozel_yol
+                return self.custom_voices_dir / dosya
 
-        for aday in adaylar:
-            if aday.exists() and aday.is_file():
-                return aday.resolve()
+        sadece_dosya = os.path.basename(temiz_girdi)
+        aday1 = self.project_root / sadece_dosya
+        if aday1.exists() and aday1.is_file():
+            return aday1
+        aday2 = self.custom_voices_dir / sadece_dosya
+        if aday2.exists() and aday2.is_file():
+            return aday2
+        return self.project_root / "ref_erkek_1.wav"
 
-        return (self.base_dir / dosya_adi_wav).resolve()
-
-    def get_voice_prompt_text(self, voice_id_or_filename: str) -> str:
-        ses = self.get_voice_by_id(voice_id_or_filename)
-        if ses and ses.get("ref_metin"):
-            return str(ses["ref_metin"]).strip()
-        ad = str(voice_id_or_filename).lower()
-        return REF_METIN_2 if "_2" in ad else REF_METIN_1
-
-    def update_voice_prompt_text(self, voice_id: str, yeni_metin: str) -> bool:
-        temiz = str(yeni_metin or "").strip()
-        if not temiz:
-            return False
-        for ses in self.voice_pool:
-            if ses.get("id") == voice_id:
-                ses["ref_metin"] = temiz
-                ozel_referans_metni_kaydet(ses.get("dosya_adi", voice_id), temiz)
-                ozel_referans_metni_kaydet(str(self.resolve_voice_path(voice_id)), temiz)
-                self.save_voice_pool()
-                return True
+    def is_builtin_voice(self, voice_id: str) -> bool:
+        if voice_id in self.YERLESIK_8_SES_IDLERI:
+            return True
+        for v in self.voice_pool:
+            if v.get("id") == voice_id:
+                return bool(v.get("yerlesik", False))
         return False
+
+    def get_voice_prompt_text(self, voice_id: str) -> str:
+        """
+        Seçilen referans sesin Arapça metnini (Prompt Text) döndürür.
+        KRİTİK DÜZELTME:
+        - Yerleşik 8 hazır ses için her zaman kendi REF_METIN_1 veya REF_METIN_2 metnini döndürür.
+        - Kullanıcı tarafından eklenen özel seslerde ('ozel_...') metin boş bırakılmışsa
+          ASLA 'REF_METIN_1' döndürmez; '' (boş metin) döndürür ki Spark-TTS yanlışlıkla
+          REF_METIN_1'i sesli olarak okumasın!
+        """
+        for v in self.voice_pool:
+            if v.get("id") == voice_id:
+                metin = str(v.get("ref_metin", "")).strip()
+                if v.get("yerlesik", False) or voice_id in self.YERLESIK_8_SES_IDLERI:
+                    return metin or (REF_METIN_2 if "_2" in voice_id else REF_METIN_1)
+                return hareke_siralamasini_normallestir(metin) if metin else ""
+
+        if voice_id in self.YERLESIK_8_SES_IDLERI:
+            return REF_METIN_2 if "_2" in voice_id else REF_METIN_1
+        return ""
 
     def add_custom_voice(
         self,
         kaynak_dosya_yolu: str,
         gorunen_ad: str,
-        cinsiyet: str = "E",
-        kategori: str = "yetiskin_E",
-        ref_metin: str = "",
+        cinsiyet: str,
+        kategori: str,
+        ref_metin: str,
     ) -> Dict[str, Any]:
         """
-        Kullanıcının seçtiği referans sesi doğrular, gerçek 24kHz Mono PCM_16 WAV
-        formatına dönüştürür ve çakışmasız benzersiz ID ile ses havuzuna ekler.
+        Kullanıcının seçtiği referans ses dosyasını (WAV/MP3/FLAC/OGG):
+        - İç sessizliklerini doğal nefes aralığına sıkıştırarak,
+        - Sondaki düz sessizlik kuyruğunu kırparak,
+        - 24000 Hz Mono PCM_16 WAV formatına dönüştürerek
+        'referans_sesler_ozel/' klasörüne kaydeder.
         """
-        kaynak = Path(kaynak_dosya_yolu).resolve()
+        kaynak = Path(kaynak_dosya_yolu)
         if not kaynak.exists():
-            raise FileNotFoundError(f"Seçilen ses dosyası bulunamadı: {kaynak}")
+            raise FileNotFoundError(f"Referans ses dosyası bulunamadı: {kaynak_dosya_yolu}")
 
-        # Benzersiz kimlik (Sil-ekle sonrasında asla eski dosya üzerine yazmaz)
-        kisa_uuid = uuid.uuid4().hex[:8]
-        temiz_stem = "".join(c if c.isalnum() else "_" for c in kaynak.stem.lower())[:20].strip("_") or "ses"
-        yeni_id = f"ozel_{temiz_stem}_{kisa_uuid}"
+        temiz_isim = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in kaynak.stem.lower())
+        benzersiz_kod = uuid.uuid4().hex[:8]
+        yeni_id = f"ozel_{temiz_isim[:18]}_{benzersiz_kod}"
         hedef_dosya_adi = f"{yeni_id}.wav"
-        hedef_yol = self.custom_voices_dir / hedef_dosya_adi
+        hedef_wav = self.custom_voices_dir / hedef_dosya_adi
 
-        # Kaynak sesi gerçekten decode edip 24kHz Mono PCM_16 WAV olarak kaydet
+        from core.studyo_motoru import referans_sesi_on_temizle, _ses_dosyasini_guvenli_oku_np
+        import soundfile as sf
+
         try:
-            veri, sr = sf.read(str(kaynak), dtype="float32")
+            temiz_gecici_yol = referans_sesi_on_temizle(kaynak)
+            shutil.copy2(temiz_gecici_yol, hedef_wav)
         except Exception:
-            if not shutil.which("ffmpeg"):
-                raise RuntimeError(
-                    f"'{kaynak.name}' dosyasını WAV formatına dönüştürmek için FFmpeg gereklidir."
-                )
-            gecici_wav = self.custom_voices_dir / f"_tmp_{kisa_uuid}.wav"
-            res = subprocess.run(
-                ["ffmpeg", "-y", "-i", str(kaynak), "-ar", "24000", "-ac", "1", "-sample_fmt", "s16", str(gecici_wav)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            if res.returncode != 0 or not gecici_wav.exists():
-                raise RuntimeError(f"Ses dosyası dönüştürülemedi: {res.stderr[-200:] if res.stderr else ''}")
-            veri, sr = sf.read(str(gecici_wav), dtype="float32")
-            try:
-                gecici_wav.unlink()
-            except OSError:
-                pass
+            veri = _ses_dosyasini_guvenli_oku_np(str(kaynak), hedef_sr=24000)
+            if veri.size < 2400:
+                raise ValueError("Seçilen ses dosyası çok kısa veya geçersiz.")
+            sf.write(str(hedef_wav), veri, 24000, subtype="PCM_16")
 
-        if veri.ndim > 1:
-            veri = np.mean(veri, axis=-1)
-        veri = veri.flatten()
+        if not hedef_wav.exists() or hedef_wav.stat().st_size < 1000:
+            raise RuntimeError("Referans ses dosyası 24kHz WAV formatına dönüştürülemedi.")
 
-        sure_sn = float(veri.size) / float(max(1, sr))
-        if sure_sn < 1.5:
-            raise ValueError("Referans ses kaydı çok kısa (En az 2-3 saniye net konuşma içermelidir).")
-
-        hedef_sr = 24000
-        if sr != hedef_sr:
-            veri = signal.resample_poly(veri, hedef_sr, sr).astype(np.float32)
-
-        sf.write(str(hedef_yol), veri, hedef_sr, subtype="PCM_16")
-
-        cins = "K" if str(cinsiyet).upper().startswith("K") else "E"
-        kat = kategori if kategori in ("yetiskin_E", "yetiskin_K", "cocuk_E", "cocuk_K") else f"yetiskin_{cins}"
-        secilen_metin = str(ref_metin or "").strip() or REF_METIN_1
+        temiz_ref_metin = hareke_siralamasini_normallestir(str(ref_metin or "").strip())
 
         yeni_kayit = {
             "id": yeni_id,
-            "ad": str(gorunen_ad or kaynak.stem).strip(),
-            "dosya_adi": hedef_dosya_adi,
-            "cinsiyet": cins,
-            "kategori": kat,
-            "ref_metin": secilen_metin,
-            "ozel_mi": True,
+            "ad": gorunen_ad.strip() or f"Özel Ses ({kaynak.stem})",
+            "dosya": hedef_dosya_adi,
+            "cinsiyet": "K" if cinsiyet.upper().startswith("K") else "E",
+            "kategori": kategori,
+            "ref_metin": temiz_ref_metin,
+            "yerlesik": False,
         }
-        self.voice_pool.append(yeni_kayit)
-        ozel_referans_metni_kaydet(hedef_dosya_adi, secilen_metin)
-        ozel_referans_metni_kaydet(str(hedef_yol), secilen_metin)
-        self.save_voice_pool()
+
+        if "custom_voices" not in self.user_settings:
+            self.user_settings["custom_voices"] = []
+        self.user_settings["custom_voices"].append(yeni_kayit)
+        self.save_user_settings()
         return yeni_kayit
 
     def remove_custom_voice(self, voice_id: str) -> bool:
-        for idx, ses in enumerate(self.voice_pool):
-            if ses.get("id") == voice_id:
-                if not ses.get("ozel_mi", False):
-                    return False
-                dosya_adi = ses.get("dosya_adi", "")
-                aday_yol = self.custom_voices_dir / dosya_adi
-                if aday_yol.exists():
+        custom_list = self.user_settings.get("custom_voices", [])
+        yeni_liste = []
+        silindi = False
+        for c in custom_list:
+            if c.get("id") == voice_id:
+                silindi = True
+                dosya_adi = c.get("dosya", "")
+                dosya_yolu = self.custom_voices_dir / dosya_adi
+                ozel_referans_metni_kaydet(voice_id, "")
+                ozel_referans_metni_kaydet(dosya_adi, "")
+                ozel_referans_metni_kaydet(str(dosya_yolu), "")
+                if dosya_yolu.exists():
                     try:
-                        aday_yol.unlink()
+                        dosya_yolu.unlink()
                     except OSError:
                         pass
-                self.voice_pool.pop(idx)
-                self.save_voice_pool()
-                return True
-        return False
+            else:
+                yeni_liste.append(c)
+
+        if silindi:
+            self.user_settings["custom_voices"] = yeni_liste
+            if "voice_text_overrides" in self.user_settings:
+                self.user_settings["voice_text_overrides"].pop(voice_id, None)
+            self.save_user_settings()
+        return silindi
+
+    def update_voice_prompt_text(self, voice_id: str, yeni_metin: str) -> None:
+        """
+        Referans sesin Arapça metnini günceller.
+        Özel seslerde ('ozel_...') kullanıcı metni silip boş bırakırsa boş olarak kaydeder;
+        yerleşik 8 seste ise boş bırakılırsa fabrika metnini korur.
+        """
+        if "voice_text_overrides" not in self.user_settings:
+            self.user_settings["voice_text_overrides"] = {}
+
+        temiz = hareke_siralamasini_normallestir(str(yeni_metin or "").strip())
+        yerlesik_mi = self.is_builtin_voice(voice_id)
+
+        if yerlesik_mi and not temiz:
+            temiz = REF_METIN_2 if "_2" in voice_id else REF_METIN_1
+
+        self.user_settings["voice_text_overrides"][voice_id] = temiz
+
+        for c in self.user_settings.get("custom_voices", []):
+            if c.get("id") == voice_id:
+                c["ref_metin"] = temiz
+
+        self.save_user_settings()
+
+    def get_default_output_dir(self) -> Path:
+        raw = self.user_settings.get("varsayilan_cikti_klasoru", "")
+        p = Path(raw) if raw else (self.project_root / "cikti_sesler")
+        p.mkdir(parents=True, exist_ok=True)
+        return p

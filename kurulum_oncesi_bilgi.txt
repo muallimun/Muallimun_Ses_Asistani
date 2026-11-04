@@ -1,0 +1,57 @@
+﻿========================================================================
+   MUALLİMUN AI SES STÜDYOSU PRO (v1.2.0) — KURULUM BİLGİLENDİRMESİ
+   24kHz Neural Arapça Ses Klonlama, Dublaj ve Stüdyo DSP Mastering
+========================================================================
+
+Muallimun AI Ses Stüdyosu Pro kurulum sihirbazına hoş geldiniz.
+
+Bu yazılım; Arapça ders kitapları, etkileşimli eğitim portalları, sözlükler,
+gramer cümleleri, atasözleri ve çoklu diyaloglar için yayın (broadcast)
+kalitesinde ses üretmek üzere geliştirilmiş bağımsız bir masaüstü stüdyosudur.
+
+------------------------------------------------------------------------
+1. ÖNE ÇIKAN STÜDYO ÖZELLİKLERİ
+------------------------------------------------------------------------
+* 3 Farklı Seslendirme Motoru Desteği:
+  1) Spark-TTS (24kHz BiCodec - Önerilen): Tam harekeli Arapça metinlerde
+     en yüksek mahreç, hareke (i'rab) sadakati ve ses klonlama kalitesi.
+  2) Hızlı Direkt Neural TTS: Ekran kartı (VRAM) gerektirmeyen, internet
+     üzerinden hazır seslerle hızlı ön-izleme ve seri üretim modu.
+  3) Coqui XTTS v2: Alternatif çok dilli deneysel klonlama motoru.
+
+* Fasih Arapça Fonetik Ön-İşlemci (Vakıf / Vasıl Motoru):
+  Durak sonlarındaki tâ-i merbûta (ة -> هْ), tenvin-i fetha (اً -> ا / Medd-i
+  İvaz), şedde, sükûn ve vasıl hemzesi kurallarını otomatik uygular.
+
+* 5-Katmanlı 24kHz Stüdyo DSP Mastering:
+  High-Pass filtre, RMS gürültü kapısı, Tanh harmonik doygunluk, Anti-Aliasing
+  Butterworth Low-Pass filtre ve True-Peak Limiter ile pürüzsüz ses çıktısı.
+
+* 8 Yerleşik Stüdyo Karakteri + Özel Ses Klonlama:
+  Yetişkin Erkek, Yetişkin Kadın, Erkek Çocuk ve Kız Çocuk seslerinin yanı
+  sıra kendi 4-10 saniyelik ses kaydınızı 24kHz standardında klonlama imkânı.
+
+* Toplu Seslendirme ve Çoklu Diyalog Stüdyosu:
+  Excel (.xlsx), JSON, CSV ve TXT dosyalarını sürükle-bırak ile yükleme,
+  Checkpoint v2 ile kaldığı yerden devam etme ve diyalogları tek dosyada
+  doğal nefes boşluklarıyla birleştirme.
+
+------------------------------------------------------------------------
+2. SİSTEM VE DONANIM BİLGİLENDİRMESİ
+------------------------------------------------------------------------
+* İşletim Sistemi : Windows 10 / 11 (64-bit)
+* Ekran Kartı     : Yerel ses klonlama (Spark-TTS) için NVIDIA CUDA destekli
+                    ekran kartı (4 GB veya üzeri VRAM) önerilir. Ekran kartı
+                    olmayan bilgisayarlarda CPU modu ve Çevrimiçi Hızlı TTS
+                    modu otomatik olarak devreye girer.
+* Dahili Araçlar  : MP3 dönüştürme ve ses seviyesi dengeleme için gerekli olan
+                    FFmpeg aracı kurulum paketine dahildir; ek kurulum gerekmez.
+
+------------------------------------------------------------------------
+3. VERİ GÜVENLİĞİ VE GÜNCELLEME KORUMASI
+------------------------------------------------------------------------
+* Ürettiğiniz ses dosyaları (cikti_sesler), eklediğiniz özel referans sesler
+  (referans_sesler_ozel) ve kişisel hareke sözlüğünüz bilgisayarınızda yerel
+  olarak saklanır; uygulama güncellendiğinde veya kaldırıldığında silinmez.
+
+Kuruluma devam etmek için lütfen "İleri" (Next) butonuna tıklayınız.
