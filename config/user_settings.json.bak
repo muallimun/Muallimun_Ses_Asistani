@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "aktif_motor_tercihi": "SPARK_ARABIC",
+  "acilis_varsayilan_spark_koru": true,
+  "zorunlu_donanim_kademesi": "OTOMATIK",
+  "uzman_mod_aktif": true,
+  "tema_modu": "aydinlik",
+  "auto_qa_aktif": true,
+  "otomatik_oynat_toplu_bitis": false,
+  "ilk_acilis_turu_gosterildi": false,
+  "otomatik_guncelleme_kontrolu": true,
+  "github_repo": "muallimun/Muallimun_Ses_Asistani",
+  "aktif_preset": "cumle",
+  "aktif_erkek_ref": "ref_erkek_1",
+  "aktif_kadin_ref": "ref_kadin_1",
+  "varsayilan_cikti_klasoru": "cikti_sesler",
+  "kullanici_presetleri": {}
+}
