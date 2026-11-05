@@ -1,6 +1,6 @@
 # 🎙️ Muallimun AI Ses Stüdyosu Pro (v1.2.0)
 
-**Yüzlerce Metni Tek Komutla Toplu Seslendirme • 24kHz Neural Ses Klonlama • Fasih Arapça Vakıf/Vasıl Motoru • 5-Katmanlı Stüdyo DSP Mastering**
+**Yüzlerce Metni Tek Komutla Toplu Seslendirme • 24kHz GPU Neural Ses Klonlama • Fasih Arapça Vakıf/Vasıl Motoru • 5-Katmanlı Stüdyo DSP Mastering**
 
 🌐 **Canlı Tanıtım ve Görsel Kılavuz:** [https://muallimun.com/muallimun_ses_studyosu/](https://muallimun.com/muallimun_ses_studyosu/)  
 🏛️ **Kurumsal Portal:** [Muallimun.Net (www.muallimun.com)](https://www.muallimun.com)  
@@ -10,23 +10,42 @@
 
 ## 🌟 Muallimun AI Ses Stüdyosu Pro Nedir ve Diğer TTS Araçlarından Nasıl Ayrılır?
 
-**Muallimun AI Ses Stüdyosu Pro**; Arapça ders kitapları, dijital sözlükler, etkileşimli eğitim materyalleri (flipbook, SCORM, mobil uygulamalar) ve e-öğrenme portalları için özel olarak geliştirilmiş açık kaynaklı, masaüstü yapay zeka seslendirme ve dublaj stüdyosudur.
+**Muallimun AI Ses Stüdyosu Pro**; Arapça ders kitapları, dijital sözlükler, etkileşimli eğitim materyalleri (flipbook, SCORM, mobil uygulamalar) ve e-öğrenme portalları için özel olarak geliştirilmiş açık kaynaklı, masaüstü yapay zeka ses klonlama ve toplu seslendirme stüdyosudur.
 
-Standart metin okuma (TTS) araçları tek seferde yalnızca bir metni okutup sıradan ve mekanik bir ses çıktısı verirken, **Muallimun AI Ses Stüdyosu Pro** eğitim yayıncılığı ve içerik üretimi için şu **5 temel farkı** sunar:
+Standart metin okuma (TTS) araçları tek seferde yalnızca bir metni okutup sıradan ve mekanik bir ses çıktısı verirken, **Muallimun AI Ses Stüdyosu Pro** eğitim yayıncılığı ve içerik üretimi için şu **6 temel farkı** sunar:
 
 1. **📦 Yüzlerce Kelime, Cümle, Diyalog ve Metni Tek Komutla Seslendirme:**
    * Excel (`.xlsx`), JSON, CSV veya TXT dosyalarınızdaki yüzlerce hatta binlerce satırı sürükle-bırak (*Drag & Drop*) ile tabloya yükleyip **tek bir komutla** sırayla seslendirebilirsiniz.
    * Kaynak dosyanızda belirlediğiniz özel dosya adlarını (`ses_dosyasi`, `ses_erkek`, `ses_kadin`) birebir korur; her kelime veya cümleyi ister tek karakterle ister **Erkek + Kadın çift üretim** olarak ayrı klasörlere kaydeder.
-2. **🎙️ 8 Hazır Stüdyo Karakteri + Kendi Özel Referans Sesinizi Klonlama:**
+2. **🚀 Gerçek GPU (NVIDIA CUDA) Hızlandırma ve Akıllı VRAM Ölçekleme:**
+   * Varsayılan ana motorumuz **⭐ Spark-TTS**, ses sentezini doğrudan ekran kartınızın (GPU) CUDA çekirdekleri üzerinde çalıştırır.
+   * **Yüksek kaliteli ve güçlü ekran kartlarında (RTX 3060 / 4060 / 4070 / 4080 vb.) sentez hızı ve toplu üretim verimi katlanarak artar; uzun Arapça cümleler bölünmeden tek nefeste çok daha hızlı üretilir.**
+3. **🎙️ 8 Hazır Stüdyo Karakteri + Kendi Özel Referans Sesinizi Klonlama:**
    * Uygulama içinde hazır gelen **8 stüdyo karakterini** (2 Yetişkin Erkek, 2 Yetişkin Kadın, 2 Erkek Çocuk, 2 Kız Çocuk) kullanabilir veya **4–10 saniyelik** temiz bir ses kaydı ekleyerek kendi sesinizi / dilediğiniz bir spikerin sesini 24kHz kalitesinde klonlayabilirsiniz.
-3. **🟢 İster Hazır Modlarla Tek Tıkla Üretim (Kolay Mod), 🟣 İster Sese Profesyonel Müdahale (Uzman Mod):**
+4. **🟢 İster Hazır Modlarla Tek Tıkla Üretim (Kolay Mod), 🟣 İster Sese Profesyonel Müdahale (Uzman Mod):**
    * **Kolay Mod:** Teknik ayarlarla uğraşmadan *Tek Kelime, Cümle, Atasözü, Diyalog* veya *Uzun Metin* modunu ve **8 Akustik Duygu/Tonlama Profilinden** birini seçip hemen ses üretin.
    * **Uzman Mod:** Sese profesyonel dokunuşlar yapmak istediğinizde *Okuma Hızı, Sıcaklık (Temperature), Top-K/Top-P, Min/Max Token, High-Pass/Low-Pass Filtre, RMS Gürültü Kapısı, Tanh Drive Sıcaklığı* ve *Başlangıç/Bitiş Nefes Payları* dahil **18+ akustik parametreyi** dahili `ℹ️` açıklama rehberleriyle dilediğiniz gibi özelleştirin.
-4. **🕌 Fasih Arapça Kıraat, Vakıf/Vasıl ve 2 Aşamalı Hibrit Harekeleme:**
+5. **🕌 Fasih Arapça Kıraat, Vakıf/Vasıl ve 2 Aşamalı Hibrit Harekeleme:**
    * Cümle ve durak sonlarındaki *tâ-i merbûtayı* (`مَدْرَسَةٌ -> مَدْرَسَهْ`), *fetha tenvini / Medd-i İvazı* (`كِتَابًا -> كِتَابَا`), noktalama korumalı *İbtidâ/Vasıl hemzelerini* ve son hareke sükûnunu (`اَلْعِلْمُ نُورٌ -> اَلْعِلْمُ نُورْ`) otomatik uygular.
    * Eksik harekeli veya harekesiz metinleri **2 Aşamalı Hibrit Tashkeel Motoru** (Öğrenen Yerel Eğitim Sözlüğü + Çevrimiçi Mishkal + İ'rab Tamamlayıcı) ile tek tıkla harekeler.
-5. **🎭 Çoklu Rol Diyalog ve Uzun Metin Birleştirme Stüdyosu:**
+6. **🎭 Çoklu Rol Diyalog ve Uzun Metin Birleştirme Stüdyosu:**
    * Diyalog metinlerindeki konuşmacıları (Öğretmen, Anne, Baba, Çocuk vb.) analiz ederek 8 sesten otomatik rol dağıtır; her diyaloğu kendi klasöründe hem satır satır hem de doğal nefes boşluklarıyla birleştirilmiş tek parça (`diyalog_tamami.mp3` / `tamami.mp3`) olarak üretir.
+
+---
+
+## 🚀 GPU (NVIDIA CUDA) Hızlandırma Mimarisi ve 4 Kademeli Performans Ölçekleme
+
+Uygulamanın varsayılan ana ses klonlama motoru olan **⭐ Spark-TTS (`IbrahimSalah/Arabic-TTS-Spark`)**, derin öğrenme tabanlı 24kHz BiCodec ses sentezini **GPU (Ekran Kartı)** üzerinde gerçekleştirir.
+
+* **Ekran Kartı Gücünün Hıza ve Kaliteye Etkisi:** Bilgisayarınızdaki NVIDIA ekran kartının CUDA çekirdek sayısı ve VRAM (Video Belleği) kapasitesi ne kadar yüksekse, ses dalgalarının örülme hızı o kadar yükselir. Özellikle yüzlerce satırlık **Toplu Seslendirme** ve **Çoklu Diyalog** işlemlerinde güçlü bir GPU, saatler sürebilecek işlemleri dakikalar içinde tamamlar.
+* **Akıllı 4 Kademeli Donanım Yönetimi (`⚡ GPU Optimize`):** Uygulama açılışta ekran kartınızın modelini ve **gerçek boş VRAM** miktarını otomatik ölçerek aşağıdaki 4 performans kademesinden en uygununu devreye alır (Dilerseniz üst bardaki **⚡ GPU Optimize** butonundan kademeyi kendiniz de seçebilirsiniz):
+
+| Donanım Kademesi | Hedef Ekran Kartı / Donanım | Tek Nefeste Okuma & Token Bütçesi | Performans ve Verim Etkisi |
+| :--- | :--- | :--- | :--- |
+| **🚀 Kademe 1: Pro Stüdyo Tam Kapasite** | **10 GB / 12 GB+ VRAM** *(RTX 3060 12GB, 3080, 4070, 4080, 4090 vb.)* | **34 Kelimeye Kadar** *(1150 Max Token)* | **Maksimum Hız & Verim:** Çok uzun cümleleri bile bölmeden tek nefeste, en yüksek hızda üretir. |
+| **⚖️ Kademe 2: Dengeli Stüdyo Performansı** | **7 GB – 10 GB VRAM** *(RTX 2070, 3060 Ti, 3070, 4060, 4060 Ti vb.)* | **26 Kelimeye Kadar** *(950 Max Token)* | **Yüksek Hızlı Seri Üretim:** Orta ve uzun cümleleri tek nefeste okur, yüksek toplu üretim hızı sunar. |
+| **⚡ Kademe 3: Hafif ve Hızlı Laptop Modu** | **4 GB – 6 GB VRAM** *(RTX 3050, 3050 Ti, GTX 1650/1660, RTX 2060 vb.)* | **22 Kelimeye Kadar** *(820 Max Token + Otomatik Önbellek Temizliği)* | **4 GB VRAM Koruma Kalkanı:** 22 kelimeye kadar cümleleri tek nefeste okur; her üretimde VRAM'i temizleyerek bellek taşmasını önler. |
+| **💻 Kademe 4: CPU (İşlemci) Modu** | **Harici GPU Olmayan Sistemler** *(Dahili GPU + Çok Çekirdekli CPU)* | **18 Kelimeye Kadar** *(650 Max Token)* | Ekran kartı olmadan işlemci üzerinde güvenli klonlama yapar (Ekran kartsız PC'lerde en hızlı üretim için **⚡ Hızlı Direkt TTS** önerilir). |
 
 ---
 
