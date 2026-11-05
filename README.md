@@ -1,35 +1,44 @@
 # 🎙️ Muallimun AI Ses Stüdyosu Pro (v1.2.0)
 
-**Fasih Arapça Vakıf/Vasıl Ön-İşleme • 24kHz Neural Ses Klonlama • 5-Katmanlı Stüdyo DSP Mastering**
+**Yüzlerce Metni Tek Komutla Toplu Seslendirme • 24kHz Neural Ses Klonlama • Fasih Arapça Vakıf/Vasıl Motoru • 5-Katmanlı Stüdyo DSP Mastering**
 
-**Muallimun AI Ses Stüdyosu Pro**, Arapça ders kitapları, dijital sözlükler, etkileşimli eğitim materyalleri ve e-öğrenme portalları ([muallimun.net](https://muallimun.net)) için geliştirilmiş açık kaynaklı, masaüstü yapay zeka seslendirme ve dublaj stüdyosudur.
+🌐 **Canlı Tanıtım ve Görsel Kılavuz:** [https://muallimun.com/muallimun_ses_studyosu/](https://muallimun.com/muallimun_ses_studyosu/)  
+🏛️ **Kurumsal Portal:** [Muallimun.Net (www.muallimun.com)](https://www.muallimun.com)  
+⬇️ **Doğrudan Kurulum Paketi (Windows 64-Bit Tek .EXE):** [Muallimun_Studyo_Pro_Setup.exe İndir](https://github.com/muallimun/Muallimun_Ses_Asistani/releases/latest/download/Muallimun_Studyo_Pro_Setup.exe)
 
 ---
 
-## ✨ Temel Özellikler
+## 🌟 Muallimun AI Ses Stüdyosu Pro Nedir ve Diğer TTS Araçlarından Nasıl Ayrılır?
 
-* **⭐ 24kHz Neural Ses Klonlama (`Spark-TTS`):** `IbrahimSalah/Arabic-TTS-Spark` (BiCodec) mimarisiyle 8 hazır stüdyo karakterini (Yetişkin Erkek/Kadın, Çocuk Erkek/Kız) veya kendi eklediğiniz özel referans sesi birebir klonlayarak çevrimdışı (offline) ses üretir.
-* **🛡️ Best-of-2 Akustik Klonlama Koruması:** Özel referans seslerde olası hizalama veya cızırtı sorunlarına karşı *Saf Akustik Kimlik Klonlama* ve *Best-of-2* doğallık seçimi ile en pürüzsüz çıktıyı garanti eder.
-* **⚡ Hızlı Direkt Neural TTS:** Ekran kartı (VRAM) gerektirmeden çevrimiçi hazır Arapça neural seslerle hızlı ön-izleme ve seri üretim yapar.
-* **🎭 8 Akustik Duygu ve Tonlama Profili:** *Otomatik (Noktalamaya Duyarlı)*, *Akademik Muallim*, *Sözlük (Tek Kelime)*, *Canlı Diyalog*, *Coşkulu Hitabet*, *Soru Tonlaması*, *Babacan & Hikmetli Nasihat* ve *Dingin Öyküleyici* profilleriyle metnin ruhuna uygun hız, sıcaklık ve DSP doygunluğu uygular.
-* **🕌 Fasih Arapça Vakıf & Vasıl Motoru ve Hibrit Harekeleme:**
-  * Cümle ve durak sonlarındaki *tâ-i merbûtayı* (`مَدْرَسَةٌ -> مَدْرَسَهْ`), *fetha tenvini* (`كِتَابًا -> كِتَابَا` / Medd-i İvaz), şedde ve son hareke sükûnunu otomatik uygular.
-  * Uzun paragrafları bölerken *harf-i cer* ve bölünmez Arapça edatların (`فِي، مِنْ، إِلَى، عَلَى، أَنْ، لَا`) satır sonunda tek başına kalmasını engeller.
-  * Harekesiz metinleri **2 Aşamalı Hibrit Tashkeel Motoru** (Çevrimiçi Mishkal + Devre Kesici + 360+ Kelimelik Yerel Eğitim Sözlüğü) ile otomatik harekeler.
-* **📦 Toplu Seslendirme, Sürükle-Bırak & Seçmeli Kuyruk:** Excel (`.xlsx`), JSON, CSV ve TXT listelerini sürükle-bırak (*Drag & Drop*) ile içe aktarır. İster tüm listeyi, ister arama ve satır aralığı (`1 - 50`) seçimiyle yalnızca belirlediğiniz satırları seslendirir.
-* **⏭️ İçerik ve Parametre Adresli Checkpoint v2 (SQLite WAL):** Yarıda kalan toplu işlemlerde metin, ses karakteri, motor, hız, sıcaklık ve DSP parmak izini doğrulayarak mevcut sağlam dosyaları atlar, kaldığı yerden devam eder.
-* **🎬 Çoklu Rol Diyalog ve Uzun Metin Stüdyosu:** Diyalog JSON dosyalarındaki konuşmacılara cinsiyet ve rollerine göre 8 sesten çakışmasız rol dağıtır; seçilen veya tüm diyalogları ayrı klasörlerde hem satır satır hem de birleştirilmiş `diyalog_tamami.mp3` olarak üretir.
-* **🎚️ Anti-Aliasing Stüdyo DSP & Teknik QA:** DC Offset temizliği, High-Pass (`80Hz`), yumuşak RMS gürültü kapısı, `Tanh Drive` harmonik doygunluk, 4. derece Butterworth Low-Pass (`11.2kHz`) anti-aliasing filtre, FFmpeg True-Peak Limiter (`level=0`) ve dalga formu üzerinde gerçek RMS/dBFS kalite kontrolü sunar.
-* **☀️/🌙 Aydınlık & Karanlık Stüdyo Teması ve A+/A- Tipografi:** Göz konforuna uygun Gece Mavisi Koyu Stüdyo ve Aydınlık Kitap Kağıdı temaları ile düzeni bozmayan `➕ A+` / `➖ A-` Arapça yazı boyutu kontrolü.
+**Muallimun AI Ses Stüdyosu Pro**; Arapça ders kitapları, dijital sözlükler, etkileşimli eğitim materyalleri (flipbook, SCORM, mobil uygulamalar) ve e-öğrenme portalları için özel olarak geliştirilmiş açık kaynaklı, masaüstü yapay zeka seslendirme ve dublaj stüdyosudur.
+
+Standart metin okuma (TTS) araçları tek seferde yalnızca bir metni okutup sıradan ve mekanik bir ses çıktısı verirken, **Muallimun AI Ses Stüdyosu Pro** eğitim yayıncılığı ve içerik üretimi için şu **5 temel farkı** sunar:
+
+1. **📦 Yüzlerce Kelime, Cümle, Diyalog ve Metni Tek Komutla Seslendirme:**
+   * Excel (`.xlsx`), JSON, CSV veya TXT dosyalarınızdaki yüzlerce hatta binlerce satırı sürükle-bırak (*Drag & Drop*) ile tabloya yükleyip **tek bir komutla** sırayla seslendirebilirsiniz.
+   * Kaynak dosyanızda belirlediğiniz özel dosya adlarını (`ses_dosyasi`, `ses_erkek`, `ses_kadin`) birebir korur; her kelime veya cümleyi ister tek karakterle ister **Erkek + Kadın çift üretim** olarak ayrı klasörlere kaydeder.
+2. **🎙️ 8 Hazır Stüdyo Karakteri + Kendi Özel Referans Sesinizi Klonlama:**
+   * Uygulama içinde hazır gelen **8 stüdyo karakterini** (2 Yetişkin Erkek, 2 Yetişkin Kadın, 2 Erkek Çocuk, 2 Kız Çocuk) kullanabilir veya **4–10 saniyelik** temiz bir ses kaydı ekleyerek kendi sesinizi / dilediğiniz bir spikerin sesini 24kHz kalitesinde klonlayabilirsiniz.
+3. **🟢 İster Hazır Modlarla Tek Tıkla Üretim (Kolay Mod), 🟣 İster Sese Profesyonel Müdahale (Uzman Mod):**
+   * **Kolay Mod:** Teknik ayarlarla uğraşmadan *Tek Kelime, Cümle, Atasözü, Diyalog* veya *Uzun Metin* modunu ve **8 Akustik Duygu/Tonlama Profilinden** birini seçip hemen ses üretin.
+   * **Uzman Mod:** Sese profesyonel dokunuşlar yapmak istediğinizde *Okuma Hızı, Sıcaklık (Temperature), Top-K/Top-P, Min/Max Token, High-Pass/Low-Pass Filtre, RMS Gürültü Kapısı, Tanh Drive Sıcaklığı* ve *Başlangıç/Bitiş Nefes Payları* dahil **18+ akustik parametreyi** dahili `ℹ️` açıklama rehberleriyle dilediğiniz gibi özelleştirin.
+4. **🕌 Fasih Arapça Kıraat, Vakıf/Vasıl ve 2 Aşamalı Hibrit Harekeleme:**
+   * Cümle ve durak sonlarındaki *tâ-i merbûtayı* (`مَدْرَسَةٌ -> مَدْرَسَهْ`), *fetha tenvini / Medd-i İvazı* (`كِتَابًا -> كِتَابَا`), noktalama korumalı *İbtidâ/Vasıl hemzelerini* ve son hareke sükûnunu (`اَلْعِلْمُ نُورٌ -> اَلْعِلْمُ نُورْ`) otomatik uygular.
+   * Eksik harekeli veya harekesiz metinleri **2 Aşamalı Hibrit Tashkeel Motoru** (Öğrenen Yerel Eğitim Sözlüğü + Çevrimiçi Mishkal + İ'rab Tamamlayıcı) ile tek tıkla harekeler.
+5. **🎭 Çoklu Rol Diyalog ve Uzun Metin Birleştirme Stüdyosu:**
+   * Diyalog metinlerindeki konuşmacıları (Öğretmen, Anne, Baba, Çocuk vb.) analiz ederek 8 sesten otomatik rol dağıtır; her diyaloğu kendi klasöründe hem satır satır hem de doğal nefes boşluklarıyla birleştirilmiş tek parça (`diyalog_tamami.mp3` / `tamami.mp3`) olarak üretir.
 
 ---
 
 ## 💿 Kurulum Seçenekleri
 
-### Seçenek A: Hazır Kurulum Paketi (`Setup.exe` — Son Kullanıcılar İçin Önerilen)
-Python veya ek kütüphane kurulumuyla uğraşmadan doğrudan çalıştırmak için:
-1. Sağ menüdeki **[Releases](https://github.com/muallimun/Muallimun_Ses_Asistani/releases)** sayfasından en güncel `Muallimun_Studyo_Pro_v1.2.0_Setup.exe` kurulum dosyasını (ve varsa `.bin` veri paketlerini) aynı klasöre indirin.
-2. `Setup.exe` dosyasını çalıştırarak kurulumu tamamlayın ve masaüstü kısayolundan stüdyoyu başlatın.
+### Seçenek A: Tek Parça Hazır Kurulum Paketi (`Setup.exe` — Son Kullanıcılar İçin Önerilen)
+Python, PyTorch, CUDA veya FFmpeg kurulumuyla uğraşmadan doğrudan çalıştırmak için:
+
+1. **[Muallimun_Studyo_Pro_Setup.exe](https://github.com/muallimun/Muallimun_Ses_Asistani/releases/latest/download/Muallimun_Studyo_Pro_Setup.exe)** (~1.57 GB) tek parça kurulum dosyasını bilgisayarınıza indirin.
+2. İndirdiğiniz **`Muallimun_Studyo_Pro_Setup.exe`** dosyasına çift tıklayarak kurulumu tamamlayın.
+   * *(Not: Windows SmartScreen koruma ekranı çıkarsa **"Ek bilgi"** → **"Yine de çalıştır"** seçeneğine tıklayın. Kurulum sihirbazı yazma izni sorunlarını önlemek için kullanıcı profilinize otomatik kurulur ve mevcut seslerinizi/ayarlarınızı korur.)*
+3. Masaüstünde oluşan **Muallimun AI Ses Stüdyosu Pro** kısayoluyla stüdyoyu başlatın.
 
 ---
 
@@ -55,13 +64,66 @@ py -3.12 main.py
 
 ---
 
+## 🧠 Desteklenen 3 Seslendirme Motoru Karşılaştırması
+
+| Ses Motoru | Çalışma Ortamı | Hareke & Klonlama | En Uygun Kullanım Senaryosu |
+| :--- | :--- | :--- | :--- |
+| **1. ⭐ Spark-TTS (`IbrahimSalah/Arabic-TTS-Spark`)** | Yerel GPU / CPU (Çevrimdışı) | **Tam Harekeli Metin Zorunlu** • 24kHz Birebir Ses Klonlama | Harekeli ders kitapları, sözlük kelimeleri, gramer cümleleri, atasözleri ve 8 karakterli diyaloglar için **önerilen ana stüdyo motoru**. |
+| **2. ⚡ Hızlı Direkt Neural TTS** | Çevrimiçi Servis (0 MB VRAM) | Harekeli ve Harekesiz Okur • Hazır Neural Ses Kullanır | Harekesiz metinler, hızlı ön-izleme ve harici ekran kartı olmayan bilgisayarlarda seri üretim. |
+| **3. 🗣️ Coqui XTTS v2** | Yerel GPU / CPU (Çevrimdışı) | Alternatif / Deneysel Çok Dilli Klonlama | Alternatif ses rengi denemeleri (Arapça mahreç ve hareke sadakati Spark-TTS kadar yüksek değildir). |
+
+---
+
+## 🎭 8 Akustik Duygu ve Tonlama Profili
+
+Seçtiğiniz tonlama profili; konuşma hızını, örnekleme sıcaklığını (`temperature`), `top_p / top_k` kararlılığını, `Tanh Drive` doygunluğunu ve cümle sonu sönümlenme payını otomatik kalibre eder:
+
+| Tonlama Profili | Akustik Karakter ve DSP Etkisi |
+| :--- | :--- |
+| **✨ 1. Otomatik (Noktalamaya Duyarlı)** | Soru (`؟`), ünlem (`!`), tek kelime ve cümle uzunluğunu algılayarak hızı ve vurguyu dinamik ayarlar. |
+| **🔤 2. Sözlük & Tek Kelime** | Düşük sıcaklık (`0.52`), dar örnekleme (`top_k=30`) ve net vakıf sükûnu ile sıfır sapmalı mahreç okuması yapar. |
+| **🎓 3. Akademik Muallim** | Gramer örnekleri ve ders kitabı cümleleri için tane tane, sakin ve anlaşılır öğretmen tonu (`0.94x`) sağlar. |
+| **🌿 4. Babacan & Hikmetli Nasihat** | Atasözleri ve vecizeler için ağırbaşlı tempo (`0.89x`), bağlaçlardan önce otomatik tefekkür durağı (`،`) ve sıcak tını uygular. |
+| **🎭 5. Canlı & Enerjik Diyalog** | Karşılıklı konuşma ve diyalog replikleri için doğal, akıcı ve samimi konuşma vurgusu sağlar. |
+| **❓ 6. Soru & Merak Vurgusu** | Soru edatları (`هَلْ، مَاذَا، كَيْفَ، أَيْنَ`) içeren cümlelerde yükselen istifham tonlamasını belirginleştirir. |
+| **❗ 7. Coşkulu & Vurgulu Hitabet** | Ünlem, nida (`يَا أَيُّهَا`) ve hitabet cümleleri için dolgun gövdeli ve güçlü vurgu sunar. |
+| **📖 8. Dingin Öyküleyici (Anlatıcı)** | Uzun okuma parçaları ve hikayeler için dinleyiciyi yormayan, dengeli anlatıcı temposu sağlar. |
+
+---
+
+## 📊 Toplu Seslendirme İçin Desteklenen Sütun İsimleri (Excel, JSON, CSV)
+
+**4. Sekmede (Toplu Seslendirme)** kendi Excel (`.xlsx`), CSV veya JSON dosyanızı yüklerken aşağıdaki sütun/alan adlarını kullanabilirsiniz (Uygulama içinden hazır şablon da indirebilirsiniz):
+
+| Alan / Sütun Adı | Zorunlu mu? | Ne İşe Yarar ve Nasıl Çalışır? |
+| :--- | :--- | :--- |
+| **`arapca`** *(veya `metin`, `kelime`)* | ✅ **Zorunlu** | Seslendirilecek Arapça kelime, cümle veya paragraf metni. |
+| **`ses_dosyasi`** *(veya `dosya_adi`, `filename`)* | İsteğe Bağlı | Tekil üretimde çıkacak ses dosyasının özel adı (Örn: `unite1_kelime05.mp3`). Belirtilmezse `id` kullanılır. |
+| **`ses_erkek` / `ses_kadin`** | İsteğe Bağlı | Çift üretimde (`Erkek + Kadın`) erkek ve kadın ses dosyalarına verilecek özel dosya adları. |
+| **`id`** *(veya `kod`, `sira`)* | Önerilir | Özel dosya adı belirtilmemişse ses dosyasının kaydedileceği benzersiz kimlik (Örn: `cumle_0001`). |
+| **`ses_secimi`** *(veya `referans_ses`)* | İsteğe Bağlı | Satıra özel karakter seçimi: `otomatik`, `IKISI` (Çift üretim), `E1`, `E2`, `K1`, `K2`, `EC1`, `EC2`, `KC1`, `KC2`, `DIREKT`. |
+| **`turkce`** *(veya `anlam`, `not`)* | İsteğe Bağlı | Tabloda bilgi ve arama kolaylığı sağlayan Türkçe anlam veya ders notu. |
+
+---
+
+## 🎚️ 5-Katmanlı 24kHz Stüdyo DSP Mastering ve Teknik Kalite Kontrolü (QA)
+
+Üretilen her ses dosyası diske kaydedilmeden önce şu 5 akustik katmandan geçirilir:
+1. **Saf Referans ve Doğal Nefes Koruması:** Özel referans seslerde doğal nefes aralıklarını (`420 ms -> 220 ms`, `22 ms` Raised-Cosine geçiş) koruyarak konuşmacı ritmini modele aktarır.
+2. **DC Offset & Sıfır Fazlı Butterworth High-Pass Filtre (`80 Hz`):** Sesin doğal gövdesini koruyarak dip uğultularını temizler.
+3. **Doğal Nefes Korumalı Yumuşak RMS Gürültü Kapısı:** Kelime aralarındaki boşluk tıslamalarını süzüp son harf sükûnlarını korur.
+4. **Anti-Aliasing Harmonik Sıcaklık (`%65 Dry + %35 Wet Tanh Drive` → `2. Derece 11.5kHz Butterworth LPF`):** Peltek ve ıslıklı Arapça harflerin (`س، ص، ث، ش`) netliğini bozmadan dijital cızırtıları süzer.
+5. **Kosinüs Eğrili Doğal Çıkış (`150 ms` Fade-Out + `120 ms` Nefes Yastığı) ve FFmpeg True-Peak Limiter (`-1.0 dBFS`):** Son kelimenin aniden kesilmesini ve MP3 dönüşümünde sesin çatlamasını (clipping) önler.
+
+---
+
 ## ⌨️ Pratik Klavye Kısayolları
 
 | Kısayol | İşlev |
 | :--- | :--- |
 | **`Ctrl + Enter`** | Aktif Arapça metni hemen seslendir (1. Sekme) |
 | **`Esc`** | Devam eden ses sentezini güvenli şekilde durdur |
-| **`Ctrl + (+)` / `Ctrl + (-)`** | Arapça metin alanı yazı boyutunu büyüt / küçült (`A+` / `A-`) |
+| **`Ctrl + (+)` / `Ctrl + (-)`** | Arapça metin alanı yazı boyutunu büyüt / küçült (`➕ A+` / `➖ A-`) |
 | **`F1`** | Kapsamlı Kullanım Kılavuzunu ve 5 Adımlı Başlangıç Turunu aç |
 
 ---
@@ -70,7 +132,7 @@ py -3.12 main.py
 
 ```text
 Muallimun_Ses_Asistani/
-├── main.py                      # Uygulama giriş noktası ve ortam kontrolü
+├── main.py                      # Tekil çalışma kilidi (QLockFile/Mutex), DPI ve güvenli başlatıcı
 ├── core/
 │   ├── config_manager.py        # Atomik JSON ayarları, 5 preset ve özel ses havuzu yönetimi
 │   ├── studyo_motoru.py         # Spark-TTS, Direkt TTS, XTTS v2, Vakıf/Vasıl ve 24kHz DSP motoru
@@ -85,6 +147,8 @@ Muallimun_Ses_Asistani/
 │   ├── voice_pool.json          # 8 yerleşik stüdyo karakteri ve özel ses tanımları
 │   └── tashkeel_sozluk.json     # Öğrenen yerel Arapça harekeleme sözlüğü
 ├── ref_*.wav                    # 24kHz yerleşik stüdyo referans ses dosyaları (8 karakter)
+├── MuallimunStudyoPro.spec      # PyInstaller derleme yapılandırması
+├── MuallimunStudyoPro_Setup.iss # Inno Setup 6 tek parça kurulum paketi betiği
 ├── requirements.txt             # Python 3.12 bağımlılık listesi
 ├── SECURITY.md                  # Güvenlik politikası ve veri bütünlüğü standartları
 └── LICENSE                      # MIT Lisansı ve üçüncü taraf model bildirimleri
@@ -96,5 +160,6 @@ Muallimun_Ses_Asistani/
 
 Bu projenin kaynak kodları **MIT Lisansı** altında sunulmaktadır. Çalışma zamanında kullanılan yapay zeka ses modelleri (`IbrahimSalah/Arabic-TTS-Spark`, `Coqui XTTS v2`, `Edge-TTS`) kendi orijinal lisanslarına tabidir; ayrıntılar için [LICENSE](LICENSE) dosyasına bakınız.
 
-* **Geliştirici:** Muallimun Dijital Eğitim Teknolojileri — [muallimun.net](https://muallimun.net)
+* **Geliştirici:** Muallimun Dijital Eğitim Teknolojileri — [www.muallimun.com](https://www.muallimun.com)
+* **Web Kılavuz ve İndirme Sayfası:** [muallimun.com/muallimun_ses_studyosu](https://muallimun.com/muallimun_ses_studyosu/)
 * **GitHub Deposu:** [github.com/muallimun/Muallimun_Ses_Asistani](https://github.com/muallimun/Muallimun_Ses_Asistani)

@@ -261,6 +261,7 @@ class TekilKurulumWorker(QThread):
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
         )
         son_satirlar: List[str] = []
         if self._aktif_proc.stdout is not None:
@@ -286,7 +287,10 @@ class TekilKurulumWorker(QThread):
             if self.gorev_tipi == "torch_cu121":
                 self.ilerleme_sinyali.emit(20, "PyTorch CUDA (2.5.1+cu121) kuruluyor / onarılıyor...")
                 self.log_sinyali.emit("📦 Çakışan torchvision kaldırılıp torch==2.5.1+cu121 kuruluyor...")
-                subprocess.call([py_exe, "-m", "pip", "uninstall", "-y", "torchvision"])
+                subprocess.call(
+                    [py_exe, "-m", "pip", "uninstall", "-y", "torchvision"],
+                    creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+                )
                 self._komut_calistir([
                     py_exe, "-m", "pip", "install",
                     "torch==2.5.1+cu121", "torchaudio==2.5.1+cu121",
@@ -333,10 +337,13 @@ class TekilKurulumWorker(QThread):
             if self.gorev_tipi == "ffmpeg":
                 self.ilerleme_sinyali.emit(30, "FFmpeg winget üzerinden kontrol ediliyor / kuruluyor...")
                 self.log_sinyali.emit("🎞️ Windows Paket Yöneticisi (winget) ile FFmpeg kuruluyor...")
-                subprocess.call([
-                    "winget", "install", "--id=Gyan.FFmpeg", "-e",
-                    "--accept-source-agreements", "--accept-package-agreements"
-                ])
+                subprocess.call(
+                    [
+                        "winget", "install", "--id=Gyan.FFmpeg", "-e",
+                        "--accept-source-agreements", "--accept-package-agreements"
+                    ],
+                    creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+                )
                 self.ilerleme_sinyali.emit(100, "FFmpeg işlemi tamamlandı.")
                 self.tamamlandi_sinyali.emit(
                     True,

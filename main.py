@@ -15,6 +15,12 @@ import importlib.util
 import importlib.machinery
 from pathlib import Path
 
+# Konsolsuz (--noconsole) EXE modunda erken print() çağrılarının çökmesini önler
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 # Uygulama Sürüm ve GitHub Güncelleme Sabitleri
 APP_VERSION = "1.2.0"
 GITHUB_REPO_DEFAULT = "muallimun/Muallimun_Ses_Asistani"
@@ -81,9 +87,10 @@ def main() -> int:
     if not temel_ortam_kontrolu():
         return 1
 
-    from PySide6.QtCore import Qt
+    import tempfile
+    from PySide6.QtCore import Qt, QLockFile
     from PySide6.QtGui import QFont
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QMessageBox
 
     # Yüksek DPI (125% / 150% laptop ekran ölçeklendirmesi) uyumluluğu
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -96,6 +103,29 @@ def main() -> int:
     app.setApplicationVersion(APP_VERSION)
     app.setFont(QFont("Segoe UI", 9))
 
+    # 1. Tekil Çalıştırma Kilidi (Uygulamanın üst üste iki kez açılmasını ve VRAM çakışmasını önler)
+    kilit_yolu = os.path.join(tempfile.gettempdir(), "muallimun_studyo_pro_v120.lock")
+    tekil_kilit = QLockFile(kilit_yolu)
+    tekil_kilit.setStaleLockTime(0)
+    if not tekil_kilit.tryLock(100):
+        QMessageBox.warning(
+            None,
+            "Muallimun AI Ses Stüdyosu Pro Açık",
+            "Muallimun AI Ses Stüdyosu Pro şu anda zaten çalışıyor!\n\n"
+            "Lütfen görev çubuğundaki (Taskbar) açık olan stüdyo penceresini kullanın.",
+        )
+        return 0
+
+    # 2. Windows Named Mutex (Inno Setup kurulum sihirbazının açık uygulamayı tespit etmesi için)
+    _win_mutex = None
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            _win_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "MuallimunStudyoPro_Running_Mutex")
+            app._win_mutex = _win_mutex
+        except Exception:
+            pass
+
     from core.config_manager import ConfigManager
     from ui.main_window import MuallimunStudyoMainWindow
 
@@ -103,7 +133,9 @@ def main() -> int:
     pencere = MuallimunStudyoMainWindow(config_manager=config_manager)
     pencere.show()
 
-    return app.exec()
+    sonuc = app.exec()
+    tekil_kilit.unlock()
+    return sonuc
 
 
 if __name__ == "__main__":

@@ -1946,7 +1946,9 @@ class KullanimKilavuzuDialog(QDialog):
         btn_tur_ac.clicked.connect(self._baslangic_turunu_ac)
         ust.addWidget(btn_tur_ac)
 
-        btn_disa_aktar = QPushButton("💾 Kılavuzu HTML Olarak Kaydet")
+        btn_disa_aktar = QPushButton("🌐 Çevrimiçi Web Kılavuzunu Aç (muallimun.com)")
+        btn_disa_aktar.setCursor(Qt.PointingHandCursor)
+        btn_disa_aktar.setToolTip("https://muallimun.com/muallimun_ses_studyosu/ adresindeki görsel stüdyo rehberini tarayıcıda açar.")
         btn_disa_aktar.setStyleSheet("background-color: #059669; color: white;")
         btn_disa_aktar.clicked.connect(self._kilavuzu_html_kaydet)
         ust.addWidget(btn_disa_aktar)
@@ -2234,35 +2236,7 @@ class KullanimKilavuzuDialog(QDialog):
         )
 
     def _kilavuzu_html_kaydet(self) -> None:
-        hedef, _ = QFileDialog.getSaveFileName(
-            self,
-            "Kullanım Kılavuzunu HTML Olarak Kaydet",
-            str(Path.home() / "Desktop" / "Muallimun_Studyo_Pro_Kullanim_Kilavuzu.html"),
-            "HTML Belgesi (*.html)",
-        )
-        if not hedef:
-            return
-        try:
-            parcalar = [
-                "<!DOCTYPE html><html lang='tr'><head><meta charset='utf-8'>",
-                "<title>Muallimun AI Ses Stüdyosu Pro — Kullanım Kılavuzu</title>",
-                "<style>body{font-family:'Segoe UI',sans-serif;max-width:960px;margin:30px auto;padding:20px;background:#0f172a;color:#f8fafc;line-height:1.7;font-size:11.5pt;}",
-                "h1,h2,h3{color:#38bdf8;} .bolum{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:22px;margin-bottom:24px;}",
-                "table{width:100%;border-collapse:collapse;margin:12px 0;} th{background:#0284c7;color:#fff;padding:8px;} td{border:1px solid #334155;padding:8px;}</style></head><body>",
-                f"<h1>🎙️ Muallimun AI Ses Stüdyosu Pro (v{APP_VERSION}) — Kapsamlı Kullanım Kılavuzu</h1>",
-            ]
-            for i in range(self.tabs.count()):
-                baslik = self.tabs.tabText(i).replace("&&", "&")
-                sayfa = self.tabs.widget(i)
-                tarayici = sayfa.findChild(QTextBrowser)
-                icerik = tarayici.toHtml() if tarayici else ""
-                parcalar.append(f"<div class='bolum'><h2>{baslik}</h2>{icerik}</div>")
-            parcalar.append("</body></html>")
-            with open(hedef, "w", encoding="utf-8") as f:
-                f.write("\n".join(parcalar))
-            QMessageBox.information(self, "Kılavuz Kaydedildi", f"Kullanım kılavuzu başarıyla kaydedildi:\n{hedef}")
-        except Exception as e:
-            QMessageBox.critical(self, "Hata", f"Kılavuz kaydedilemedi:\n{e}")
+        QDesktopServices.openUrl(QUrl("https://muallimun.com/muallimun_ses_studyosu/"))
 
 
 # ==============================================================================

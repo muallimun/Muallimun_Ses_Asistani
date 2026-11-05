@@ -764,9 +764,14 @@ class TekliSentezWorker(QThread):
 # 6. ANA PENCERE (MUALLİMUN AI SES STÜDYOSU PRO)
 # ==============================================================================
 class MuallimunStudyoMainWindow(QMainWindow):
+    arka_plan_log_sinyali = Signal(str)
+    arka_plan_gpu_yenile_sinyali = Signal()
+
     def __init__(self, config_manager: ConfigManager):
         super().__init__()
         self.config_manager = config_manager
+        self.arka_plan_log_sinyali.connect(self._teknik_log_ekle)
+        self.arka_plan_gpu_yenile_sinyali.connect(self.gpu_durumunu_guncelle)
         if self.config_manager.user_settings.get("github_repo") in (
             "", None, "abdullahtat/muallimun-ai-ses-studyosu-pro"
         ):
@@ -849,16 +854,15 @@ class MuallimunStudyoMainWindow(QMainWindow):
         if self.studyo_motor is None:
             self.studyo_motor = MuallimunStudyoSesMotoru(
                 motor_tercihi=hedef_motor,
-                log_callback=log_fn or self._teknik_log_ekle,
+                log_callback=log_fn or self.arka_plan_log_sinyali.emit,
                 zorunlu_kademe=kademe_param,
             )
         else:
-            if log_fn is not None:
-                self.studyo_motor.log_callback = log_fn
+            self.studyo_motor.log_callback = log_fn or self.arka_plan_log_sinyali.emit
             if self.studyo_motor.motor_tipi != hedef_motor:
                 self.studyo_motor.aktif_motoru_degistir(hedef_motor)
 
-        QTimer.singleShot(100, self.gpu_durumunu_guncelle)
+        self.arka_plan_gpu_yenile_sinyali.emit()
         return self.studyo_motor
 
     # ------------------------------------------------------------------
@@ -1977,7 +1981,19 @@ class MuallimunStudyoMainWindow(QMainWindow):
                         cmb_5.setCurrentIndex(idx_5)
                         cmb_5.blockSignals(False)
 
-        if self.studyo_motor is not None and (self.tekli_worker is None or not self.tekli_worker.isRunning()):
+        toplu_calisiyor = (
+            hasattr(self, "sekme_4_toplu")
+            and self.sekme_4_toplu.batch_worker is not None
+            and self.sekme_4_toplu.batch_worker.isRunning()
+        )
+        ozel_calisiyor = (
+            hasattr(self, "sekme_5_diyalog")
+            and self.sekme_5_diyalog.ozel_worker is not None
+            and self.sekme_5_diyalog.ozel_worker.isRunning()
+        )
+        tekli_calisiyor = self.tekli_worker is not None and self.tekli_worker.isRunning()
+
+        if self.studyo_motor is not None and not (tekli_calisiyor or toplu_calisiyor or ozel_calisiyor):
             self.studyo_motor.aktif_motoru_degistir(kod)
             self.gpu_durumunu_guncelle()
 
@@ -2119,6 +2135,11 @@ class MuallimunStudyoMainWindow(QMainWindow):
                 elif dlg.secim_sonucu == "DIREKT_TTS_GEC":
                     secilen_motor = "FAST_DIRECT_TTS"
                     referans_kullan = False
+                    idx_m = self.cmb_tekli_motor.findData("FAST_DIRECT_TTS")
+                    if idx_m >= 0:
+                        self.cmb_tekli_motor.blockSignals(True)
+                        self.cmb_tekli_motor.setCurrentIndex(idx_m)
+                        self.cmb_tekli_motor.blockSignals(False)
 
         self.ses_oynatici.durdur()
 
