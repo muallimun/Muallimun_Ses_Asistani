@@ -10,7 +10,7 @@
 
 ## 🌟 Muallimun AI Ses Stüdyosu Pro Nedir ve Diğer TTS Araçlarından Nasıl Ayrılır?
 
-**Muallimun AI Ses Stüdyosu Pro**; Arapça ders kitapları, dijital sözlükler, etkileşimli eğitim materyalleri (flipbook, SCORM, mobil uygulamalar) ve e-öğrenme portalları için özel olarak geliştirilmiş açık kaynaklı, masaüstü yapay zeka ses klonlama ve toplu seslendirme stüdyosudur.
+**Muallimun AI Ses Stüdyosu Pro**; Arapça ders kitapları, dijital sözlükler, etkileşimli eğitim materyalleri (flipbook, SCORM, mobil uygulamalar) ve e-öğrenme portalları için özel olarak geliştirilmiş bağımsız masaüstü yapay zeka ses klonlama ve toplu seslendirme stüdyosudur.
 
 Standart metin okuma (TTS) araçları tek seferde yalnızca bir metni okutup sıradan ve mekanik bir ses çıktısı verirken, **Muallimun AI Ses Stüdyosu Pro** eğitim yayıncılığı ve içerik üretimi için şu **6 temel farkı** sunar:
 
@@ -59,37 +59,14 @@ Uygulamanın varsayılan ana ses klonlama motoru olan **⭐ Spark-TTS (`IbrahimS
 
 ---
 
-## 💿 Kurulum Seçenekleri
+## 💿 İndirme ve Kurulum Rehberi (Windows 10/11 64-Bit)
 
-### Seçenek A: Tek Parça Hazır Kurulum Paketi (`Setup.exe` — Son Kullanıcılar İçin Önerilen)
-Python, PyTorch, CUDA veya FFmpeg kurulumuyla uğraşmadan doğrudan çalıştırmak için:
+Python, PyTorch, CUDA veya FFmpeg kurulumuyla uğraşmadan doğrudan çalıştırmak için tüm bileşenler tek bir kurulum paketinde birleştirilmiştir:
 
 1. **[Muallimun_Studyo_Pro_Setup.exe](https://github.com/muallimun/Muallimun_Ses_Asistani/releases/latest/download/Muallimun_Studyo_Pro_Setup.exe)** (~1.57 GB) tek parça kurulum dosyasını bilgisayarınıza indirin.
 2. İndirdiğiniz **`Muallimun_Studyo_Pro_Setup.exe`** dosyasına çift tıklayarak kurulumu tamamlayın.
    * *(Not: Windows SmartScreen koruma ekranı çıkarsa **"Ek bilgi"** → **"Yine de çalıştır"** seçeneğine tıklayın. Kurulum sihirbazı yazma izni sorunlarını önlemek için kullanıcı profilinize otomatik kurulur ve mevcut seslerinizi/ayarlarınızı korur.)*
 3. Masaüstünde oluşan **Muallimun AI Ses Stüdyosu Pro** kısayoluyla stüdyoyu başlatın.
-
----
-
-### Seçenek B: Kaynak Koddan Kurulum ve Çalıştırma (Geliştiriciler İçin — Python 3.12)
-
-#### 1. Depoyu İndirin
-~~~powershell
-git clone https://github.com/muallimun/Muallimun_Ses_Asistani.git
-cd Muallimun_Ses_Asistani
-~~~
-
-#### 2. PyTorch (CUDA 12.1) ve Gerekli Kütüphaneleri Kurun
-NVIDIA ekran kartı (GPU) hızlandırması için önce PyTorch CUDA sürümünü, ardından diğer bağımlılıkları yükleyin:
-~~~powershell
-py -3.12 -m pip install torch==2.5.1+cu121 torchaudio==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121
-py -3.12 -m pip install -r requirements.txt
-~~~
-
-#### 3. Uygulamayı Başlatın
-~~~powershell
-py -3.12 main.py
-~~~
 
 ---
 
@@ -157,39 +134,14 @@ Seçtiğiniz tonlama profili; konuşma hızını, örnekleme sıcaklığını (`
 
 ---
 
-## 📂 Proje Dizin Yapısı
+## 📄 Lisans, Telif Hakkı ve İletişim
 
-~~~text
-Muallimun_Ses_Asistani/
-├── main.py                      # Tekil çalışma kilidi (QLockFile/Mutex), DPI ve güvenli başlatıcı (v1.2.1)
-├── version.json                 # GitHub otomatik güncelleme kontrolcüsü için sürüm ve yayın notları
-├── core/
-│   ├── config_manager.py        # Atomik JSON ayarları, 5 preset ve özel ses havuzu yönetimi
-│   ├── studyo_motoru.py         # Spark-TTS, Direkt TTS, XTTS v2, Vakıf/Vasıl ve 24kHz DSP motoru
-│   └── batch_worker.py          # Toplu üretim işçisi, 8 tonlama profili, Excel/JSON/CSV/TXT ve SQLite Checkpoint v2
-├── ui/
-│   ├── main_window.py           # Ana stüdyo penceresi (Sekme 1, 2, 3), Waveform QA ve ses oynatıcı
-│   ├── studyo_sekmeler_b.py     # Toplu Seslendirme (Sekme 4) ve Diyalog/Uzun Metin Stüdyosu (Sekme 5)
-│   ├── setup_wizard.py          # Modeller rehberi, Tıkla-Kur kütüphane yöneticisi ve referans ses denetimi
-│   └── rehber_ve_guncelleyici.py# Hibrit Arapça harekeleme motoru, QSS temaları, kılavuz ve GitHub güncelleyici
-├── config/
-│   ├── factory_presets.json     # 5 içerik modunun fabrika DSP ve sentez parametreleri
-│   ├── voice_pool.json          # 8 yerleşik stüdyo karakteri ve özel ses tanımları
-│   └── tashkeel_sozluk.json     # Öğrenen yerel Arapça harekeleme sözlüğü
-├── ref_*.wav                    # 24kHz yerleşik stüdyo referans ses dosyaları (8 karakter)
-├── MuallimunStudyoPro.spec      # PyInstaller derleme yapılandırması
-├── MuallimunStudyoPro_Setup.iss # Inno Setup 6 tek parça kurulum paketi betiği
-├── requirements.txt             # Python 3.12 bağımlılık listesi
-├── SECURITY.md                  # Güvenlik politikası ve veri bütünlüğü standartları
-└── LICENSE                      # MIT Lisansı ve üçüncü taraf model bildirimleri
-~~~
+**Muallimun AI Ses Stüdyosu Pro**, **Muallimun Dijital Eğitim Teknolojileri** tarafından öğretmenler, öğrenciler, akademisyenler ve içerik üreticileri için **Ücretsiz Eğitim Yazılımı (Freeware — Tüm Hakları Saklıdır / All Rights Reserved)** olarak sunulmaktadır.
 
----
+* **Üretilen Seslerin Kullanım Hakkı:** Kullanıcıların bu yazılımla ürettikleri ses dosyaları (`.wav` / `.mp3`) üzerinde tüm eğitim ve yayın hakları kendilerine aittir.
+* **Telif Koruması:** Geliştiricinin yazılı izni olmaksızın yazılımın kaynak kodlarının, DSP/fonetik algoritmalarının veya arayüz tasarımının kopyalanması, tersine mühendislik (decompile) işlemine tabi tutulması, farklı bir isim/marka altında yeniden dağıtılması veya ticari olarak satılması kesinlikle yasaktır.
+* **Üçüncü Taraf Bileşenler:** Çalışma zamanında kullanılan yapay zeka ses modelleri (`IbrahimSalah/Arabic-TTS-Spark`, `Coqui XTTS v2`, `Edge-TTS`) kendi orijinal lisanslarına tabidir; ayrıntılar için [LICENSE](LICENSE) dosyasına bakınız.
 
-## 📄 Lisans ve İletişim
-
-Bu projenin kaynak kodları **MIT Lisansı** altında sunulmaktadır. Çalışma zamanında kullanılan yapay zeka ses modelleri (`IbrahimSalah/Arabic-TTS-Spark`, `Coqui XTTS v2`, `Edge-TTS`) kendi orijinal lisanslarına tabidir; ayrıntılar için [LICENSE](LICENSE) dosyasına bakınız.
-
-* **Geliştirici:** Muallimun Dijital Eğitim Teknolojileri — [www.muallimun.com](https://www.muallimun.com)
-* **Web Kılavuz ve İndirme Sayfası:** [muallimun.com/muallimun_ses_studyosu](https://muallimun.com/muallimun_ses_studyosu/)
-* **GitHub Deposu:** [github.com/muallimun/Muallimun_Ses_Asistani](https://github.com/muallimun/Muallimun_Ses_Asistani)
+- **Geliştirici:** Muallimun Dijital Eğitim Teknolojileri — [www.muallimun.com](https://www.muallimun.com)
+- **Web Kılavuz ve İndirme Sayfası:** [muallimun.com/muallimun_ses_studyosu](https://muallimun.com/muallimun_ses_studyosu/)
+- **GitHub İndirme ve Güncelleme Merkezi:** [github.com/muallimun/Muallimun_Ses_Asistani](https://github.com/muallimun/Muallimun_Ses_Asistani)
