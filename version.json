@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
-  "release_date": "2026-11-05",
+  "version": "1.2.1",
+  "release_date": "2026-11-08",
   "download_url": "https://github.com/muallimun/Muallimun_Ses_Asistani/releases/latest",
-  "notes": "v1.2.0 Sürüm Notları:\n• Spark-TTS (24kHz BiCodec) ana stüdyo motoru ve 8 Akustik Tonlama Profili eklendi.\n• Anti-Aliasing 24kHz Stüdyo DSP Mastering (Tanh Drive -> Butterworth LPF) ve Best-of-2 özel ses klonlama koruması eklendi.\n• 2 Aşamalı Hibrit Arapça Harekeleme Motoru (Mishkal Devre Kesici + Yerel Sözlük) eklendi.\n• Seçmeli Kelime/Cümle/Diyalog seslendirme, Sürükle-Bırak (Drag & Drop) ve parametre duyarlı Checkpoint v2 eklendi.\n• Aydınlık/Karanlık stüdyo teması, A+/A- yazı boyutu kontrolü ve 4 GB VRAM ekran kartları için bellek optimizasyonu eklendi."
+  "notes": "v1.2.1 Sürüm Notları:\n• Spark-TTS (24kHz BiCodec) ana stüdyo motoru, 8 Akustik Tonlama Profili ve 3 aşamalı akıllı kurtarma mekanizması eklendi.\n• 24kHz 5-Katmanlı Stüdyo DSP Mastering: Kenar dolgulu (edge-padded) RMS Gate ile ilk 50ms ses kaybı giderildi, ilk hece koruma kalkanı (<48ms) ve Gated RMS (aktif konuşma enerjisi) birleştirme dengelemesi eklendi.\n• Fasih Arapça (MSA) Fonetik Motoru: Kat' hemzesi (إِنْسَان، إِسْمَاعِيل) koruması, Mîm-i Cem (عَلَيْهِمُ الْـ) dammesi, İltikaü's-Sakineyn (وَمِنَ الـ، رَأَوُ الْـ), mansub med (الْقَاضِي) vakfı ve tamlama korumalı cümle bölücü eklendi.\n• 2 Aşamalı Hibrit Arapça Harekeleme Motoru (Öğrenen Yerel Sözlük + Mishkal Devre Kesici + Bitişik Harf-i Cer/Atıf İ'rab Tamamlayıcı) güncellendi.\n• Referans ses dosya imzalı SQLite Checkpoint v2, 1./3./4./5. sekmeler arası çift yönlü tam senkronizasyon, Aydınlık/Karanlık tema ve A+/A- yazı boyutu kontrolü eklendi."
 }
